@@ -16,10 +16,6 @@
 
 namespace winrt::RNSVG::implementation {
 
-// TEMP DEBUG: g_trace 定义（声明在 SvgView.h），各处填值，DrawTextRecords 画面板。
-DebugTrace g_trace;
-static std::wstring ToW(double v) { return std::to_wstring(v); }
-
 SvgViewProps::SvgViewProps(const winrt::Microsoft::ReactNative::ViewProps& props, const winrt::Microsoft::ReactNative::IComponentProps& cloneFrom)
   : m_props(props)
 {
@@ -228,7 +224,8 @@ void RecurseRenderNode(
     const winrt::Microsoft::ReactNative::ComponentView &view,
     ID2D1SvgDocument &document,
     ID2D1SvgElement &svgElement,
-    D2D1_MATRIX_3X2_F accumulatedTransform) noexcept {
+    D2D1_MATRIX_3X2_F accumulatedTransform,
+    const TextContext &inheritedTextCtx) noexcept {
   for (auto const &child : view.Children()) {
     auto renderable = child.UserData().try_as<RenderableView>();
 
@@ -243,19 +240,20 @@ void RecurseRenderNode(
 
       if (renderable->IsTextElement()) {
         // text/tspan：D2D1 SVG 不支持，不 CreateChild。RecordText 收集文字信息
-        //（content/font/fill/x/y + 累积 transform）到 SvgView，DrawSvgDocument 画完
-        // 形状后用 DWrite 自绘。仍递归子（Text 的子是 TSpan）。
-        // Text 的 x/y 作为 translate 累积（像 Paper TextView::DrawGroup），子 TSpan 的
-        // pos 会含此偏移——修 dot 等把 x/y 放在 <text> 元素的情况。
-        auto tt = renderable->GetTextTranslate();
-        if (tt.x != 0.0f || tt.y != 0.0f) {
-          childTransform = D2D1::Matrix3x2F::Translation(tt.x, tt.y) * childTransform;
-        }
-        renderable->RecordText(*root, childTransform);
-        RecurseRenderNode(root, child, document, svgElement, childTransform);
+        //（content + 几何 x/y/dx/dy + 累积 transform + 继承的 font/fill/anchor）到
+        // SvgView，DrawSvgDocument 画完形状后用 DWrite 自绘。仍递归子（Text 的子是
+        // TSpan）。Text 的 x/y 不做 translate 叠加，作为默认原点经 context 下传——
+        // tspan 自带 x 时是文本坐标系绝对值，叠加会把 d2 多行标签的 x 翻倍。
+        // 可继承属性（font/textAnchor/fill/baseline/原点）：元素自身值优先合并进父链
+        // context 再传下去——JS 会把纯文本包成无 props 的 TSpan，不继承则 anchor/
+        // fontSize/fill 全丢（iOS/Android/Paper 在 native 侧走父链，Fabric 在此显式传）。
+        TextContext childCtx = inheritedTextCtx;
+        childCtx.ApplyOverrides(renderable->GetTextContext(*root));
+        renderable->RecordText(*root, childTransform, childCtx);
+        RecurseRenderNode(root, child, document, svgElement, childTransform, childCtx);
       } else {
         ID2D1SvgElement &newElement = renderable->Render(*root, document, svgElement);
-        RecurseRenderNode(root, child, document, newElement, childTransform);
+        RecurseRenderNode(root, child, document, newElement, childTransform, inheritedTextCtx);
       }
     } else {
       // 嵌套 <svg>（d2 等）：SvgView 不是 RenderableView，上面 try_as 失败会跳过，
@@ -263,7 +261,6 @@ void RecurseRenderNode(
       // 递归其子，让内层 svg 的 shape/text 进当前文档。
       auto nestedSvg = child.UserData().try_as<ISvgView>();
       if (nestedSvg) {
-        g_trace.nestedBranchHit++;
         winrt::com_ptr<ID2D1SvgElement> nestedElem;
         svgElement.CreateChild(L"svg", nestedElem.put());
         if (nestedElem) {
@@ -309,8 +306,7 @@ void RecurseRenderNode(
                   D2D1::Matrix3x2F::Translation(ox, oy) * accumulatedTransform;
             }
           }
-          RecurseRenderNode(root, child, document, *nestedElem, nestedTextTransform);
-          g_trace.nestedTransformTx = nestedTextTransform._31;
+          RecurseRenderNode(root, child, document, *nestedElem, nestedTextTransform, inheritedTextCtx);
         }
       }
     }
@@ -365,41 +361,20 @@ void SvgView::Draw(
   }
 
   m_textRecords.clear();
-  g_trace = DebugTrace{};  // 清 debug
 
   for (auto const &child : view.Children()) {
     auto renderable = child.UserData().as<RenderableView>();
     if (renderable->IsSupported()) {
-      RecurseRenderNode(this, child, *spSvgDocument, *spRoot, D2D1::Matrix3x2F::Identity());
+      RecurseRenderNode(this, child, *spSvgDocument, *spRoot, D2D1::Matrix3x2F::Identity(), TextContext{});
     }
   }
 
   deviceContext5->DrawSvgDocument(spSvgDocument.get());
 
   // D2D1 SVG 不支持 text/tspan，DrawSvgDocument 忽略它们。RecurseRenderNode 已把文字
-  // 信息（含累积 transform）收集到 m_textRecords，这里用 DWrite 叠加自绘。
+  // 信息（含累积 transform + 继承的 font/fill/anchor）收集到 m_textRecords，这里用
+  // DWrite 叠加自绘。
   DrawTextRecords(deviceContext, size);
-
-  // TEMP DEBUG: 一次性诊断面板（错开 y 位置，左侧绿色字）。
-  g_trace.recordCount = static_cast<int>(m_textRecords.size());
-  {
-    com_ptr<IDWriteFactory> df;
-    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<::IUnknown**>(df.put_void()));
-    com_ptr<IDWriteTextFormat> dtf;
-    df->CreateTextFormat(L"Consolas", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 16.0f, L"", dtf.put());
-    com_ptr<ID2D1SolidColorBrush> gb;
-    deviceContext->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.6f, 0.0f, 1.0f), gb.put());
-    auto draw = [&](const std::wstring &s, float y) {
-      deviceContext->DrawText(s.c_str(), static_cast<UINT32>(s.size()), dtf.get(),
-          D2D1::RectF(8, y, 800, y + 20), gb.get(), D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-    };
-    draw(L"nested=" + ToW(g_trace.nestedBranchHit) + L" nestTx=" + ToW(g_trace.nestedTransformTx), 8);
-    draw(L"text=" + ToW(g_trace.textBranchHit) + L" x[" + g_trace.textX + L"] y[" + g_trace.textY + L"] tt=" + ToW(g_trace.textTransformTx), 30);
-    draw(L"  ff[" + g_trace.textFontFamily + L"] fs=" + ToW(g_trace.textFontSize) + L" anchor[" + g_trace.textAnchor + L"]", 52);
-    draw(L"tspan=" + ToW(g_trace.tspanBranchHit) + L" content[" + g_trace.tspanContent + L"] tt=" + ToW(g_trace.tspanTransformTx), 74);
-    draw(L"  ff[" + g_trace.tspanFontFamily + L"] fs=" + ToW(g_trace.tspanFontSize), 96);
-    draw(L"records=" + ToW(g_trace.recordCount), 118);
-  }
 }
 
 // viewBox→surface 映射（复现 D2D1 DrawSvgDocument 的 preserveAspectRatio）。
@@ -441,6 +416,20 @@ D2D1::Matrix3x2F SvgView::ComputeViewBoxTransform(winrt::Windows::Foundation::Si
       D2D1::Matrix3x2F::Translation(offsetX - minX * scaleX, offsetY - minY * scaleY);
 }
 
+// fontWeight（"bold"/"normal"/数字串，可能为空）折算 DWrite weight。
+static DWRITE_FONT_WEIGHT ParseFontWeight(const std::wstring &weight) noexcept {
+  if (weight == L"bold") return DWRITE_FONT_WEIGHT_BOLD;
+  if (!weight.empty() && weight != L"normal") {
+    try {
+      int numeric = std::stoi(weight);
+      if (numeric >= 600) return DWRITE_FONT_WEIGHT_BOLD;
+    } catch (...) {
+      // 非数字串按 normal 处理。
+    }
+  }
+  return DWRITE_FONT_WEIGHT_NORMAL;
+}
+
 void SvgView::DrawTextRecords(
     const winrt::com_ptr<ID2D1DeviceContext> &deviceContext,
     winrt::Windows::Foundation::Size size) noexcept {
@@ -463,7 +452,7 @@ void SvgView::DrawTextRecords(
     com_ptr<IDWriteTextFormat> textFormat;
     dwriteFactory->CreateTextFormat(
         rec.fontFamily.empty() ? L"Arial" : rec.fontFamily.c_str(),
-        nullptr, rec.fontWeight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        nullptr, ParseFontWeight(rec.fontWeight), DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"", textFormat.put());
     brush->SetColor(rec.fill);
 
@@ -478,16 +467,29 @@ void SvgView::DrawTextRecords(
     UINT32 lineCount = 0;
     textLayout->GetLineMetrics(&lm, 1, &lineCount);
     float baseline = (lineCount > 0) ? lm.baseline : fs * 0.8f;
+    float lineH = (lineCount > 0) ? lm.height : fs * 1.2f;
 
     // textAnchor: start(默认)=左对齐 pos.x；middle=pos.x-width/2；end=pos.x-width（右对齐）。
     float left = pos.x;
     if (rec.textAnchor == L"middle") left = pos.x - tm.width / 2;
     else if (rec.textAnchor == L"end") left = pos.x - tm.width;
 
-    // SVG y 是基线 baseline；DWrite DrawTextLayout 的 origin 是 layout box top-left，
-    // 文字基线 = origin.y + baseline。故 origin.y = y - baseline（精确，非 fontSize 近似）。
+    // 竖直定位：SVG y 默认是字母基线（alphabetic）。dominant/alignment-baseline 为
+    // central/middle（zrender/vega 的刻度标签全靠它居中）时按行盒中心对齐 y；
+    // text-before-edge/hanging 按行盒顶部；text-after-edge/bottom 按行盒底部。
+    // DWrite DrawTextLayout 的 origin 是 layout box top-left，基线 = origin.y + baseline。
+    float top = pos.y - baseline;
+    const std::wstring &bm = rec.baselineMode;
+    if (bm == L"central" || bm == L"middle") {
+      top = pos.y - lineH / 2;
+    } else if (bm == L"text-before-edge" || bm == L"hanging" || bm == L"text-top") {
+      top = pos.y;
+    } else if (bm == L"text-after-edge" || bm == L"bottom" || bm == L"text-bottom") {
+      top = pos.y - lineH;
+    }
+
     deviceContext->DrawTextLayout(
-        D2D1::Point2F(left, pos.y - baseline), textLayout.get(), brush.get(),
+        D2D1::Point2F(left, top), textLayout.get(), brush.get(),
         D2D1_DRAW_TEXT_OPTIONS_NONE);
   }
 }

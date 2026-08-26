@@ -9,7 +9,7 @@ import type {
 import type { ViewProps } from './utils';
 
 import type { UnsafeMixed } from './codegenUtils';
-import { FontObject, NumberArray, NumberProp } from '../lib/extract/types';
+import { FontObject, NumberProp } from '../lib/extract/types';
 
 interface SvgNodeCommonProps {
   name?: string;

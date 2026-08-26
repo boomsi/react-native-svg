@@ -52,29 +52,17 @@ struct __declspec(uuid("ed381ffa-461a-48Bf-a3c0-5d9a42eecd30")) ISvgView : publi
 // DWrite 自绘文字记录：D2D1 SVG 不支持 text/tspan 元素，DrawSvgDocument 会忽略它们。
 // RecurseRenderNode 遍历到 TSpan 时调 SvgView::AddTextRecord 收集，Draw 在画完形状后
 // 用 DWrite 叠加（累积 transform + viewBox→surface 映射算 surface 坐标）。
+// font/anchor/baseline 已含 Text→TSpan 继承（TextContext），fill 默认黑。
 struct TextRecord {
   std::wstring content;
   std::wstring fontFamily;
   float fontSize{16.0f};
-  DWRITE_FONT_WEIGHT fontWeight{DWRITE_FONT_WEIGHT_NORMAL};
+  std::wstring fontWeight;   // 空/"normal"/"bold"/数字串，DrawTextRecords 折算 DWrite weight
   D2D1::ColorF fill{0, 0, 0, 1};
   float x{0.0f}, y{0.0f};  // SVG 坐标（已含累积 transform）
-  std::wstring textAnchor;  // start(默认)/middle/end，DWrite 水平对齐用
+  std::wstring textAnchor;   // start(默认)/middle/end，DWrite 水平对齐用
+  std::wstring baselineMode; // 空=alphabetic(默认)；central/middle/hanging/text-before-edge...
 };
-
-// TEMP DEBUG: d2 text 一次性诊断（各处填值，DrawTextRecords 画面板）。
-struct DebugTrace {
-  int nestedBranchHit = 0;
-  float nestedTransformTx = -999;
-  int textBranchHit = 0;
-  std::wstring textX, textY, textFontFamily, textAnchor;
-  float textFontSize = -1, textTransformTx = -999;
-  int tspanBranchHit = 0;
-  std::wstring tspanContent, tspanFontFamily;
-  float tspanX = -999, tspanY = -999, tspanFontSize = -1, tspanTransformTx = -999;
-  int recordCount = -1;
-};
-extern DebugTrace g_trace;
 
 struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspectable, ISvgView> {
  public:

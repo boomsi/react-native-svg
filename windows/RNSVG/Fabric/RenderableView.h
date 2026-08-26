@@ -5,6 +5,7 @@
 #include <JSValueComposition.h>
 #include <NativeModules.h>
 #include "D2DHelpers.h"
+#include "SvgFontFields.h"
 #include "SvgStrings.h"
 
 namespace winrt::Microsoft::ReactNative {
@@ -115,6 +116,84 @@ HRESULT SetColorMode(
 #define REACT_END_SVG_RENDERABLE_COMMON_PROPS_CLONE \
      }
 
+// Text 子树的可继承属性上下文：SVG 语义里 font/fill/text-anchor/alignment-baseline
+// 沿文本树继承（<text> 上的属性作用于其 <tspan> 子）。JS extractText 会把纯文本包成
+// 不带 props 的 <TSpan>，iOS/Android/Paper Windows 在 native 侧走父链继承；Fabric 版
+// 由 RecurseRenderNode 递归时显式携带（元素自身值优先，见 ApplyOverrides）。
+struct TextContext {
+  std::wstring fontFamily;   // 空 = 未设置
+  float fontSize{-1.0f};     // <0 = 未设置
+  std::wstring fontWeight;   // 空 = 未设置（"bold"/"normal"/数字串）
+  std::wstring textAnchor;   // 空 = start（默认）
+  std::wstring baselineMode; // 空 = alphabetic（默认）；central/middle/hanging/...
+  bool hasFill{false};
+  D2D1::ColorF fill{0, 0, 0, 1};
+  // <text> 自身的 x/y(+dx/dy)：作为子 TSpan 的默认原点（tspan 未带 x/y 时用它；
+  // 带了则是文本坐标系里的绝对值，不能用 translate 叠加——否则 d2 多行标签 x 会翻倍）。
+  float originX{0.0f}, originY{0.0f};
+  bool originPresent{false};
+
+  // 用 self 的已设置字段覆盖 *this（子元素自身值优先于继承值）。
+  void ApplyOverrides(const TextContext &self) noexcept {
+    if (!self.fontFamily.empty()) fontFamily = self.fontFamily;
+    if (self.fontSize > 0) fontSize = self.fontSize;
+    if (!self.fontWeight.empty()) fontWeight = self.fontWeight;
+    if (!self.textAnchor.empty()) textAnchor = self.textAnchor;
+    if (!self.baselineMode.empty()) baselineMode = self.baselineMode;
+    if (self.hasFill) {
+      hasFill = true;
+      fill = self.fill;
+    }
+    if (self.originPresent) {
+      originPresent = true;
+      originX = self.originX;
+      originY = self.originY;
+    }
+  }
+};
+
+// 从可选的 fill(ColorStruct)/color props 解析文本填充色；解析不到返回 nullopt。
+// type 0 = 具体颜色，type 2 = currentColor（用 color prop 值）。
+inline std::optional<D2D1::ColorF> ResolveTextFill(
+    const std::optional<ColorStruct> &fill,
+    const std::optional<winrt::Microsoft::ReactNative::Color> &color,
+    const SvgView &root) noexcept {
+  if (fill) {
+    const auto &fc = fill.value();
+    if (fc.type == 0 && fc.payload)
+      return D2DHelpers::AsD2DColor(fc.payload.AsWindowsColor(root.Theme()));
+    if (fc.type == 2 && color)
+      return D2DHelpers::AsD2DColor(color.value().AsWindowsColor(root.Theme()));
+  }
+  if (color)
+    return D2DHelpers::AsD2DColor(color.value().AsWindowsColor(root.Theme()));
+  return std::nullopt;
+}
+
+// 从元素自身的 font struct + alignmentBaseline + fill/color props 构造 TextContext
+// （Text/TSpan 共用；未设置的字段留空，由 ApplyOverrides 决定是否覆盖继承值）。
+inline TextContext BuildTextContext(
+    const std::optional<SvgFontFields> &font,
+    const std::wstring &alignmentBaseline,
+    const std::optional<ColorStruct> &fill,
+    const std::optional<winrt::Microsoft::ReactNative::Color> &color,
+    const SvgView &root) noexcept {
+  TextContext ctx;
+  if (font) {
+    const auto &f = font.value();
+    ctx.fontFamily = f.fontFamily;
+    if (f.fontSize.value > 0) ctx.fontSize = f.fontSize.value;
+    ctx.fontWeight = f.fontWeight;
+    ctx.textAnchor = f.textAnchor;
+  }
+  ctx.baselineMode = alignmentBaseline;
+  if (auto resolved = ResolveTextFill(fill, color, root)) {
+    ctx.hasFill = true;
+    ctx.fill = resolved.value();
+  }
+  return ctx;
+}
+
 struct __declspec(uuid("a03986c0-b06e-4fb8-a86e-16fcc47b2f31")) RenderableView : public ::IUnknown {
  public:
   RenderableView() = default;
@@ -147,10 +226,15 @@ struct __declspec(uuid("a03986c0-b06e-4fb8-a86e-16fcc47b2f31")) RenderableView :
   // 而是 RecurseRenderNode 时调 RecordText 收集文字信息到 SvgView，DrawSvgDocument 画完
   // 形状后用 DWrite 自绘（见 SvgView::Draw）。
   virtual bool IsTextElement() const noexcept { return false; }
-  virtual void RecordText(SvgView &root, D2D1_MATRIX_3X2_F accumulatedTransform) noexcept {}
-  // text 元素的 x/y（作为 translate 累积到子，像 Paper TextView::DrawGroup）。
-  // Text override 返回 x/y；TSpan 默认 {0,0}（其 x/y 在 RecordText 内处理）。
-  virtual D2D1_POINT_2F GetTextTranslate() const noexcept { return {0.0f, 0.0f}; }
+  // 收集一条文字记录（TSpan 持有 content）；inherited 是父链已合并好的可继承属性
+  //（含 <text> 的 x/y 默认原点 originX/originY）。
+  virtual void RecordText(
+      SvgView &root,
+      D2D1_MATRIX_3X2_F accumulatedTransform,
+      const TextContext &inherited) noexcept {}
+  // 本元素自身的可继承属性（font/fill/alignment-baseline + Text 的原点），
+  // RecurseRenderNode 会 ApplyOverrides 到父链 context 上再传给子。
+  virtual TextContext GetTextContext(const SvgView &root) const noexcept { return {}; }
   // 元素的 transform matrix（common props.matrix，6 元素）。RecurseRenderNode 累积父链
   // matrix 传给 text 的 RecordText，用于算 text 在 SVG 坐标系的位置。
   virtual std::optional<std::vector<float>> GetMatrix() const noexcept { return std::nullopt; }
