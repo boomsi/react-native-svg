@@ -1,7 +1,9 @@
 #include "pch.h"
 #include "TextView.h"
 #include "SvgFontFields.h"
+#include "SvgView.h"
 #include "RenderableView.h"
+#include <d2d1.h>
 
 namespace winrt::RNSVG::implementation {
 
@@ -26,15 +28,15 @@ struct TextProps : winrt::implements<TextProps, winrt::Microsoft::ReactNative::I
   REACT_SVG_RENDERABLE_COMMON_PROPS;
 
   REACT_FIELD(x)
-  std::wstring x;
+  std::vector<float> x;
   REACT_FIELD(y)
-  std::wstring y;
+  std::vector<float> y;
   REACT_FIELD(dx)
-  std::wstring dx;
+  std::vector<float> dx;
   REACT_FIELD(dy)
-  std::wstring dy;
+  std::vector<float> dy;
   REACT_FIELD(rotate)
-  std::wstring rotate;
+  std::vector<float> rotate;
   REACT_FIELD(font)
   std::optional<SvgFontFields> font;
 };
@@ -62,18 +64,27 @@ struct TextView : winrt::implements<TextView, winrt::Windows::Foundation::IInspe
   // Text 的 x/y 作为 translate 累积到子（TSpan 的 pos 计算会含此偏移）。
   D2D1_POINT_2F GetTextTranslate() const noexcept override {
     auto props = m_props.as<TextProps>();
-    auto parseFirst = [](const std::wstring &s) -> float {
-      if (s.empty()) return 0.0f;
-      try {
-        return std::stof(s);
-      } catch (...) {
-        return 0.0f;
-      }
+    auto firstOr0 = [](const std::vector<float> &v) -> float {
+      return v.empty() ? 0.0f : v[0];
     };
-    return {parseFirst(props->x), parseFirst(props->y)};
+    return {firstOr0(props->x), firstOr0(props->y)};
   }
 
   // Text 自身不持文字（在 TSpan），RecordText 空。RecurseRenderNode 仍会递归其子 TSpan。
+  void RecordText(SvgView &root, D2D1_MATRIX_3X2_F accumulatedTransform) noexcept override {
+    (void)root;
+    // TEMP DEBUG: 填 g_trace（Text 的 props + transform）。
+    auto props = m_props.as<TextProps>();
+    g_trace.textBranchHit++;
+    g_trace.textX = props->x;
+    g_trace.textY = props->y;
+    g_trace.textTransformTx = accumulatedTransform._31;
+    if (props->font) {
+      g_trace.textFontFamily = props->font.value().fontFamily;
+      g_trace.textFontSize = props->font.value().fontSize.value;
+      g_trace.textAnchor = props->font.value().textAnchor;
+    }
+  }
 };
 
 void RegisterTextComponent(const winrt::Microsoft::ReactNative::IReactPackageBuilderFabric &builder) noexcept {

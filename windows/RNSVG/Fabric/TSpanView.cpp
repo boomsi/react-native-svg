@@ -32,17 +32,17 @@ struct TSpanProps : winrt::implements<TSpanProps, winrt::Microsoft::ReactNative:
   // 文字内容：extractText(prop, false) 在 TSpan 上产出 content=String(children)。
   REACT_FIELD(content)
   std::wstring content;
-  // x/y/dx/dy/rotate：JS extractLengthList 序列化为空格分隔数字字符串，取首值。
+  // x/y/dx/dy/rotate：JS extractLengthList 传 number 数组 [26.5]，用 vector<float> 收。
   REACT_FIELD(x)
-  std::wstring x;
+  std::vector<float> x;
   REACT_FIELD(y)
-  std::wstring y;
+  std::vector<float> y;
   REACT_FIELD(dx)
-  std::wstring dx;
+  std::vector<float> dx;
   REACT_FIELD(dy)
-  std::wstring dy;
+  std::vector<float> dy;
   REACT_FIELD(rotate)
-  std::wstring rotate;
+  std::vector<float> rotate;
   REACT_FIELD(font)
   std::optional<SvgFontFields> font;
 };
@@ -69,19 +69,22 @@ struct TSpanView : winrt::implements<TSpanView, winrt::Windows::Foundation::IIns
 
   void RecordText(SvgView &root, D2D1_MATRIX_3X2_F accumulatedTransform) noexcept override {
     auto props = m_props.as<TSpanProps>();
+    // TEMP DEBUG: 填 g_trace（TSpan 的 props + 收到的 transform）。
+    g_trace.tspanBranchHit++;
+    g_trace.tspanContent = props->content;
+    g_trace.tspanTransformTx = accumulatedTransform._31;
+    if (props->font) {
+      g_trace.tspanFontFamily = props->font.value().fontFamily;
+      g_trace.tspanFontSize = props->font.value().fontSize.value;
+    }
     if (props->content.empty()) return;
 
-    // extractLengthList 空格分隔数字字符串，取首值；parse 失败回 0。
-    auto parseFirst = [](const std::wstring &s) -> float {
-      if (s.empty()) return 0.0f;
-      try {
-        return std::stof(s);
-      } catch (...) {
-        return 0.0f;
-      }
+    // x/y/dx/dy 是 number 数组，取首值。
+    auto firstOr0 = [](const std::vector<float> &v) -> float {
+      return v.empty() ? 0.0f : v[0];
     };
-    float tx = parseFirst(props->x) + parseFirst(props->dx);
-    float ty = parseFirst(props->y) + parseFirst(props->dy);
+    float tx = firstOr0(props->x) + firstOr0(props->dx);
+    float ty = firstOr0(props->y) + firstOr0(props->dy);
     // 累积 transform（父 g matrix + 自身 matrix）应用到 (x,y) → SVG 坐标系文字基线点。
     // D2D1::Matrix3x2F 继承 D2D1_MATRIX_3X2_F（布局相同），reinterpret 即可。
     const D2D1::Matrix3x2F &m = reinterpret_cast<const D2D1::Matrix3x2F &>(accumulatedTransform);

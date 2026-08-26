@@ -54,6 +54,8 @@ export default class Text extends Shape<TextProps> {
       this
     );
     Object.assign(props, extractText(prop, true));
+    // TEMP DEBUG: 看 Text 传给 native 的 x/y/font。
+    console.log('[rnsvg-text]', JSON.stringify({ x: props.x, y: props.y, font: props.font, content: (props as any).content }));
     props.ref = this.refMethod as (instance: Component | null) => void;
     return <RNSVGText {...props} />;
   }

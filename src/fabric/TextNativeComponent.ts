@@ -66,11 +66,11 @@ interface SvgGroupCommonProps {
 }
 
 interface SvgTextCommonProps {
-  dx?: UnsafeMixed<NumberArray>;
-  dy?: UnsafeMixed<NumberArray>;
-  x?: UnsafeMixed<NumberArray>;
-  y?: UnsafeMixed<NumberArray>;
-  rotate?: UnsafeMixed<NumberArray>;
+  dx?: ReadonlyArray<Float>;
+  dy?: ReadonlyArray<Float>;
+  x?: ReadonlyArray<Float>;
+  y?: ReadonlyArray<Float>;
+  rotate?: ReadonlyArray<Float>;
   inlineSize?: UnsafeMixed<NumberProp>;
   textLength?: UnsafeMixed<NumberProp>;
   baselineShift?: UnsafeMixed<NumberProp>;

@@ -62,6 +62,20 @@ struct TextRecord {
   std::wstring textAnchor;  // start(默认)/middle/end，DWrite 水平对齐用
 };
 
+// TEMP DEBUG: d2 text 一次性诊断（各处填值，DrawTextRecords 画面板）。
+struct DebugTrace {
+  int nestedBranchHit = 0;
+  float nestedTransformTx = -999;
+  int textBranchHit = 0;
+  std::wstring textX, textY, textFontFamily, textAnchor;
+  float textFontSize = -1, textTransformTx = -999;
+  int tspanBranchHit = 0;
+  std::wstring tspanContent, tspanFontFamily;
+  float tspanX = -999, tspanY = -999, tspanFontSize = -1, tspanTransformTx = -999;
+  int recordCount = -1;
+};
+extern DebugTrace g_trace;
+
 struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspectable, ISvgView> {
  public:
 
