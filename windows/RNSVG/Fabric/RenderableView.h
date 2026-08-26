@@ -143,6 +143,18 @@ struct __declspec(uuid("a03986c0-b06e-4fb8-a86e-16fcc47b2f31")) RenderableView :
   virtual void OnRender(const SvgView &svgView, ID2D1SvgDocument &document, ID2D1SvgElement & /*svgElement*/) noexcept;
   virtual bool IsSupported() const noexcept;
 
+  // Text 元素（Text/TSpan）：D2D1 SVG 不支持 text/tspan，不 CreateChild 到 D2D1 文档，
+  // 而是 RecurseRenderNode 时调 RecordText 收集文字信息到 SvgView，DrawSvgDocument 画完
+  // 形状后用 DWrite 自绘（见 SvgView::Draw）。
+  virtual bool IsTextElement() const noexcept { return false; }
+  virtual void RecordText(SvgView &root, D2D1_MATRIX_3X2_F accumulatedTransform) noexcept {}
+  // text 元素的 x/y（作为 translate 累积到子，像 Paper TextView::DrawGroup）。
+  // Text override 返回 x/y；TSpan 默认 {0,0}（其 x/y 在 RecordText 内处理）。
+  virtual D2D1_POINT_2F GetTextTranslate() const noexcept { return {0.0f, 0.0f}; }
+  // 元素的 transform matrix（common props.matrix，6 元素）。RecurseRenderNode 累积父链
+  // matrix 传给 text 的 RecordText，用于算 text 在 SVG 坐标系的位置。
+  virtual std::optional<std::vector<float>> GetMatrix() const noexcept { return std::nullopt; }
+
   void Invalidate(const winrt::Microsoft::ReactNative::ComponentView &view);
 
  protected:
