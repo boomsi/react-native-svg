@@ -9,6 +9,8 @@
 #ifdef USE_FABRIC
 #include "Fabric/SvgView.h"
 #include "Fabric/RectView.h"
+#include "Fabric/TSpanView.h"
+#include "Fabric/TextView.h"
 #include "Fabric/CircleView.h"
 #include "Fabric/EllipseView.h"
 #include "Fabric/LineView.h"
@@ -81,8 +83,8 @@ namespace winrt::RNSVG::implementation
     RegisterLinearGradientComponent(fabricPackageBuilder);
     RegisterRadialGradientComponent(fabricPackageBuilder);
     RegisterUnsupportedSvgComponent(L"RNSVGPattern", fabricPackageBuilder);
-    RegisterUnsupportedSvgComponent(L"RNSVGText", fabricPackageBuilder);
-    RegisterUnsupportedSvgComponent(L"RNSVGTSpan", fabricPackageBuilder);
+    RegisterTextComponent(fabricPackageBuilder);
+    RegisterTSpanComponent(fabricPackageBuilder);
 #else
     packageBuilder.AddViewManager(L"SvgViewManager", []() { return winrt::make<SvgViewManager>(); });
     packageBuilder.AddViewManager(L"RectViewManager", []() { return winrt::make<RectViewManager>(); });

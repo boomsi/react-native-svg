@@ -9,7 +9,7 @@ import type {
 import type { ViewProps } from './utils';
 
 import type { UnsafeMixed } from './codegenUtils';
-import { FontObject, NumberArray, NumberProp } from '../lib/extract/types';
+import { FontObject, NumberProp } from '../lib/extract/types';
 
 interface SvgNodeCommonProps {
   name?: string;
@@ -66,11 +66,11 @@ interface SvgGroupCommonProps {
 }
 
 interface SvgTextCommonProps {
-  dx?: UnsafeMixed<NumberArray>;
-  dy?: UnsafeMixed<NumberArray>;
-  x?: UnsafeMixed<NumberArray>;
-  y?: UnsafeMixed<NumberArray>;
-  rotate?: UnsafeMixed<NumberArray>;
+  dx?: ReadonlyArray<Float>;
+  dy?: ReadonlyArray<Float>;
+  x?: ReadonlyArray<Float>;
+  y?: ReadonlyArray<Float>;
+  rotate?: ReadonlyArray<Float>;
   inlineSize?: UnsafeMixed<NumberProp>;
   textLength?: UnsafeMixed<NumberProp>;
   baselineShift?: UnsafeMixed<NumberProp>;

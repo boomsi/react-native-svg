@@ -78,6 +78,10 @@
     <CharacterSet>Unicode</CharacterSet>
     <PlatformToolset>v143</PlatformToolset>
     <GenerateManifest>false</GenerateManifest>
+    <!-- Microsoft.ReactNative.winmd (target/Microsoft.ReactNative/) 是 RNW 预编译 x86，
+         与本工程 x64 不符。运行时由 Fuse 的源码构建 x64 Microsoft.ReactNative.dll 提供，
+         此处仅抑制构建时架构检查（同 SupramarkDiagramNativeWinRT.vcxproj 做法）。 -->
+    <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
     <UseDebugLibraries>true</UseDebugLibraries>
@@ -107,18 +111,14 @@
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <WarningLevel>Level4</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /bigobj /utf-8</AdditionalOptions>
       <DisableSpecificWarnings>4453;28204</DisableSpecificWarnings>
       <PreprocessorDefinitions>_WINRT_DLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalUsingDirectories>$(WindowsSDK_WindowsMetadata);$(AdditionalUsingDirectories)</AdditionalUsingDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
-    <Midl Condition="'$(UseFabric)'!='true'">
-      <!-- This allows applications targetting older Windows SDKs (e.g. RNW 0.65 apps) to consume the library generated WinMD -->
-      <AdditionalOptions>%(AdditionalOptions) /noattributename</AdditionalOptions>
-    </Midl>
     <Link>
-      <AdditionalDependencies>dxguid.lib;shell32.lib;user32.lib;windowsapp.lib;%(AdditionalDependenices)</AdditionalDependencies>
+      <AdditionalDependencies>dxguid.lib;shell32.lib;user32.lib;windowsapp.lib;dwrite.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Console</SubSystem>
       <GenerateWindowsMetadata>true</GenerateWindowsMetadata>
       <ModuleDefinitionFile>RNSVG.def</ModuleDefinitionFile>
@@ -223,6 +223,8 @@
     <ClCompile Include="Fabric/RectView.cpp" />
     <ClCompile Include="Fabric/RenderableView.cpp" />
     <ClCompile Include="Fabric/SvgView.cpp" />
+    <ClCompile Include="Fabric/TSpanView.cpp" />
+    <ClCompile Include="Fabric/TextView.cpp" />
     <ClCompile Include="Fabric/UnsupportedSvgView.cpp" />
     <ClCompile Include="Fabric/UseView.cpp" />
   </ItemGroup>

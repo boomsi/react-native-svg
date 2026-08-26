@@ -33,6 +33,13 @@ struct GroupView : winrt::implements<GroupView, winrt::Windows::Foundation::IIns
     auto props = winrt::get_self<SvgGroupProps>(m_props);
     SetCommonSvgProps(svgView, document, element, *props);
   }
+
+  // g 的 transform matrix（common props.matrix）。RecurseRenderNode 累积父链 matrix
+  // 传给子 text 元素，用于算 text 在 SVG 坐标系的位置。
+  std::optional<std::vector<float>> GetMatrix() const noexcept override {
+    auto props = winrt::get_self<SvgGroupProps>(m_props);
+    return props->matrix;
+  }
 };
 
 void RegisterGroupComponent(const winrt::Microsoft::ReactNative::IReactPackageBuilderFabric &builder) noexcept {

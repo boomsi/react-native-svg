@@ -140,6 +140,7 @@ export type TextProps = {
   baselineShift?: NumberProp;
   verticalAlign?: NumberProp;
   alignmentBaseline?: string;
+  dominantBaseline?: string;
 } & fontProps;
 
 export default function extractText(props: TextProps, container: boolean) {
@@ -154,6 +155,7 @@ export default function extractText(props: TextProps, container: boolean) {
     baselineShift,
     verticalAlign,
     alignmentBaseline,
+    dominantBaseline,
   } = props;
 
   const textChildren =
@@ -173,7 +175,9 @@ export default function extractText(props: TextProps, container: boolean) {
     inlineSize,
     baselineShift,
     verticalAlign,
-    alignmentBaseline,
+    // SVG 的 dominant-baseline（zrender/vega 的竖直对齐全靠它）没有独立的
+    // native 通道，按语义折叠进 alignmentBaseline；显式 alignment-baseline 优先。
+    alignmentBaseline: alignmentBaseline ?? dominantBaseline,
     font: extractFont(props),
     x: extractLengthList(x),
     y: extractLengthList(y),
