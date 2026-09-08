@@ -1,11 +1,11 @@
 {
   "version": "15.15.5",
-  "name": "react-native-svg",
-  "description": "SVG library for react-native",
-  "homepage": "https://github.com/software-mansion/react-native-svg",
+  "name": "@boomsi/react-native-svg",
+  "description": "SVG library for react-native — fork of react-native-svg with Windows Fabric text rendering fixes",
+  "homepage": "https://github.com/boomsi/react-native-svg#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/software-mansion/react-native-svg"
+    "url": "git+https://github.com/boomsi/react-native-svg.git"
   },
   "license": "MIT",
   "main": "lib/commonjs/index.js",
@@ -60,7 +60,7 @@
     "jest": "jest",
     "lint": "eslint --ext .ts,.tsx src",
     "peg": "pegjs -o src/lib/extract/transform.js ./src/lib/extract/transform.peg && peggy -o src/filter-image/extract/extractFiltersString.js src/filter-image/extract/extractFiltersString.pegjs && peggy -o src/lib/extract/transformToRn.js src/lib/extract/transformToRn.pegjs",
-    "prepare": "npm run bob && husky install",
+    "prepare": "npm run bob",
     "test": "npm run lint && npm run tsc",
     "tsc": "tsc --noEmit",
     "e2e": "jest e2e",

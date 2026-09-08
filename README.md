@@ -1,12 +1,40 @@
+# @boomsi/react-native-svg
+
+> [`react-native-svg`](https://www.npmjs.com/package/react-native-svg)（[software-mansion/react-native-svg](https://github.com/software-mansion/react-native-svg)）的个人 fork，仅对 **Windows Fabric（新架构）** 的文本渲染做了修复，iOS / Android / macOS 及 Windows 旧架构（Paper）行为与上游一致。
+
+## 基线版本
+
+基于上游 **15.15.5**（`Release 15.15.5` 之后的 main，基线 commit [`7b2c7d87`](https://github.com/software-mansion/react-native-svg/commit/7b2c7d87)）。后续同步上游时请更新本节。
+
+## 相对上游的改动
+
+Windows Fabric 路径使用 D2D1 的 `ID2D1SvgDocument` 整文档渲染，而该引擎**不支持 `text` / `tspan`**（遇到即忽略），导致所有图表文字消失。本 fork 改为 **DWrite 叠加自绘**：
+
+- `windows/RNSVG/Fabric/`：新增 `TextView` / `TSpanView` 真实 renderable（原为 UnsupportedSvgView）；`SvgView` 收集 `TextRecord`，在 `DrawSvgDocument` 之后用 `ID2D1DeviceContext::DrawTextLayout` 叠加绘制文字（精确 baseline + textAnchor 对齐）。
+- **Text→TSpan 样式继承**：新增 `TextContext` 递归携带 textAnchor / fontSize / fontFamily / fontWeight / fill（上游 JS 会把纯文本包成无 props 的 `<TSpan>`，继承语义此前缺失）。
+- **tspan 坐标语义**：tspan 自带 `x/y` 按文本坐标系绝对值处理，`dy` 按相对增量；Text 的 `x/y/dx/dy` 并入子元素默认原点。
+- **`dominant-baseline` / `alignment-baseline`**：支持 central/middle、text-before-edge/hanging、text-after-edge/bottom 竖直定位，默认 alphabetic。
+- **嵌套 `<svg>`**：Fabric 路径原先整棵子树跳过，现支持嵌套 svg 并把其 viewBox 变换累积进文字变换。
+- **JS 侧 props 类型修正**：`TextNativeComponent` / `TSpanNativeComponent` 的 `x/y/dx/dy/rotate` 从 `UnsafeMixed<NumberArray>` 改为 `ReadonlyArray<Float>`，与 native `std::vector<float>` 对齐。
+
+完整方案、根因复盘与 Windows 构建命令见 [CHANGE.md](./CHANGE.md)。
+
+## 安装
+
+```bash
+npm install @boomsi/react-native-svg
+```
+
+用法与上游 `react-native-svg` 相同，可 1:1 替换。Windows Fabric 宿主需自行从包内 `windows/` 目录构建 `RNSVG.dll`（构建注意事项见 CHANGE.md）。
+
+---
+
 <p align="center">
   <img src="https://user-images.githubusercontent.com/39658211/200319759-006c214f-941c-496c-a3c2-7de5b7ce33dc.png" width="100%" alt="React Native SVG at Software Mansion" >
-  <a href="https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-react-native-svg-1&n=1"><img src="https://swm-delivery.com/www/images/zone-gh-react-native-svg-1?n=1" /></a>
-  <a href="https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-react-native-svg-2&n=1"><img src="https://swm-delivery.com/www/images/zone-gh-react-native-svg-2?n=1" /></a>
-  <a href="https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-react-native-svg-3&n=1"><img src="https://swm-delivery.com/www/images/zone-gh-react-native-svg-3?n=1" /></a>
 </p>
 
-[![Version](https://img.shields.io/npm/v/react-native-svg.svg)](https://www.npmjs.com/package/react-native-svg)
-[![NPM](https://img.shields.io/npm/dm/react-native-svg.svg)](https://www.npmjs.com/package/react-native-svg)
+[![Version](https://img.shields.io/npm/v/@boomsi/react-native-svg.svg)](https://www.npmjs.com/package/@boomsi/react-native-svg)
+[![NPM](https://img.shields.io/npm/dm/@boomsi/react-native-svg.svg)](https://www.npmjs.com/package/@boomsi/react-native-svg)
 
 `react-native-svg` provides SVG support to React Native on iOS, Android, macOS, Windows, and a compatibility layer for the web.
 
