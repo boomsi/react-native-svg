@@ -1,31 +1,31 @@
 # @boomsi/react-native-svg
 
-> [`react-native-svg`](https://www.npmjs.com/package/react-native-svg)（[software-mansion/react-native-svg](https://github.com/software-mansion/react-native-svg)）的个人 fork，仅对 **Windows Fabric（新架构）** 的文本渲染做了修复，iOS / Android / macOS 及 Windows 旧架构（Paper）行为与上游一致。
+> A personal fork of [`react-native-svg`](https://www.npmjs.com/package/react-native-svg) ([software-mansion/react-native-svg](https://github.com/software-mansion/react-native-svg)) with fixes for **text rendering on the Windows Fabric (new architecture) renderer**. Behavior on iOS / Android / macOS and on the legacy Windows (Paper) renderer is identical to upstream.
 
-## 基线版本
+## Base version
 
-基于上游 **15.15.5**（`Release 15.15.5` 之后的 main，基线 commit [`7b2c7d87`](https://github.com/software-mansion/react-native-svg/commit/7b2c7d87)）。后续同步上游时请更新本节。
+Forked from upstream **15.15.5** (main right after `Release 15.15.5`, base commit [`7b2c7d87`](https://github.com/software-mansion/react-native-svg/commit/7b2c7d87)). Update this section whenever syncing with upstream.
 
-## 相对上游的改动
+## Changes vs. upstream
 
-Windows Fabric 路径使用 D2D1 的 `ID2D1SvgDocument` 整文档渲染，而该引擎**不支持 `text` / `tspan`**（遇到即忽略），导致所有图表文字消失。本 fork 改为 **DWrite 叠加自绘**：
+The Windows Fabric renderer draws the whole document through D2D1's `ID2D1SvgDocument`, which **does not support `text` / `tspan`** (they are silently ignored), so all SVG text disappears. This fork paints text on top via **DirectWrite**:
 
-- `windows/RNSVG/Fabric/`：新增 `TextView` / `TSpanView` 真实 renderable（原为 UnsupportedSvgView）；`SvgView` 收集 `TextRecord`，在 `DrawSvgDocument` 之后用 `ID2D1DeviceContext::DrawTextLayout` 叠加绘制文字（精确 baseline + textAnchor 对齐）。
-- **Text→TSpan 样式继承**：新增 `TextContext` 递归携带 textAnchor / fontSize / fontFamily / fontWeight / fill（上游 JS 会把纯文本包成无 props 的 `<TSpan>`，继承语义此前缺失）。
-- **tspan 坐标语义**：tspan 自带 `x/y` 按文本坐标系绝对值处理，`dy` 按相对增量；Text 的 `x/y/dx/dy` 并入子元素默认原点。
-- **`dominant-baseline` / `alignment-baseline`**：支持 central/middle、text-before-edge/hanging、text-after-edge/bottom 竖直定位，默认 alphabetic。
-- **嵌套 `<svg>`**：Fabric 路径原先整棵子树跳过，现支持嵌套 svg 并把其 viewBox 变换累积进文字变换。
-- **JS 侧 props 类型修正**：`TextNativeComponent` / `TSpanNativeComponent` 的 `x/y/dx/dy/rotate` 从 `UnsafeMixed<NumberArray>` 改为 `ReadonlyArray<Float>`，与 native `std::vector<float>` 对齐。
+- `windows/RNSVG/Fabric/`: added real renderables `TextView` / `TSpanView` (previously `UnsupportedSvgView`); `SvgView` collects `TextRecord`s and paints text after `DrawSvgDocument` with `ID2D1DeviceContext::DrawTextLayout` (accurate baseline + textAnchor alignment).
+- **Text→TSpan style inheritance**: a `TextContext` carrying textAnchor / fontSize / fontFamily / fontWeight / fill is passed down while recursing (upstream JS wraps raw text into a prop-less `<TSpan>`, so the inheritance semantics were missing).
+- **tspan coordinate semantics**: `x/y` on a tspan are treated as absolute values in the text coordinate system and `dy` as a relative increment; `x/y/dx/dy` on `Text` feed the default origin of its children.
+- **`dominant-baseline` / `alignment-baseline`**: supports central/middle, text-before-edge/hanging and text-after-edge/bottom vertical positioning; defaults to alphabetic.
+- **Nested `<svg>`**: the Fabric path used to skip the whole subtree; nested svgs are now supported and their viewBox transforms accumulate into the text transform.
+- **JS-side prop type fixes**: `x/y/dx/dy/rotate` in `TextNativeComponent` / `TSpanNativeComponent` changed from `UnsafeMixed<NumberArray>` to `ReadonlyArray<Float>` to match the native `std::vector<float>`.
 
-完整方案、根因复盘与 Windows 构建命令见 [CHANGE.md](./CHANGE.md)。
+Full design notes, root-cause analysis and the Windows build commands live in [CHANGE.md](./CHANGE.md) (in Chinese).
 
-## 安装
+## Installation
 
 ```bash
 npm install @boomsi/react-native-svg
 ```
 
-用法与上游 `react-native-svg` 相同，可 1:1 替换。Windows Fabric 宿主需自行从包内 `windows/` 目录构建 `RNSVG.dll`（构建注意事项见 CHANGE.md）。
+Usage is identical to upstream `react-native-svg` and it can be used as a 1:1 drop-in replacement. Windows Fabric hosts need to build `RNSVG.dll` from the `windows/` directory in the package (see CHANGE.md for build notes).
 
 ---
 
