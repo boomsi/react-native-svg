@@ -4,6 +4,7 @@
 
 #include <d2d1_3.h>
 #include <dwrite.h>
+#include <unordered_map>
 #include <NativeModules.h>
 #pragma push_macro("X86")
 #undef X86
@@ -69,6 +70,51 @@ struct TextRecord {
   std::wstring baselineMode; // 空=alphabetic(默认)；central/middle/hanging/text-before-edge...
 };
 
+// 元素自身的 marker 引用（marker-start/mid/end，已由 JS extractProps 从
+// url(#id) 剥成纯 id）。Fabric 下 D2D1 不渲染 <marker>，RecurseRenderNode 收集
+// 引用元素锚点后由 SvgView 手动绘制箭头（见 SvgView::DrawMarkerRecords）。
+struct MarkerRefs {
+  std::optional<std::wstring> start;
+  std::optional<std::wstring> mid;
+  std::optional<std::wstring> end;
+  bool empty() const noexcept {
+    return !start && !mid && !end;
+  }
+};
+
+// 已归一化的 marker 定义属性（RNSVGMarker 组件，MarkerView 从 props 折算）。
+struct MarkerDefAttrs {
+  std::wstring name;                        // = Marker 的 id
+  float refX{0.0f}, refY{0.0f};
+  float markerWidth{3.0f}, markerHeight{3.0f};  // JS 默认 3×3（strokeWidth units）
+  float vbMinX{0.0f}, vbMinY{0.0f}, vbWidth{0.0f}, vbHeight{0.0f};
+  bool hasViewBox{false};
+  bool strokeWidthUnits{true};              // markerUnits == strokeWidth（SVG 默认）
+  std::wstring orient;                      // "auto" / "auto-start-reverse" / 数字串（度）
+};
+
+// RNSVGMarker 的实现接口：SvgView 需要它的 props + 子组件树来把内容渲染进独立
+// marker 文档（D2D1 不支持 <marker>，DrawMarkerRecords 手动放置与绘制）。
+struct __declspec(uuid("6f2f8a5e-3c1d-4b9a-9e2c-8d4b7a1f0c33")) IMarkerView : public ::IUnknown {
+  virtual MarkerDefAttrs Attrs() = 0;
+};
+
+// marker 引用元素（带 marker-start/mid/end 的 path/line）：几何锚点已在元素局部
+// 坐标系算好（端点 + 切线角），绘制时经 accumulatedTransform 映射到根用户坐标。
+struct MarkerRefRecord {
+  MarkerRefs refs;
+  D2D1_MATRIX_3X2_F accumulatedTransform{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+  D2D1_POINT_2F startPoint{0.0f, 0.0f}, endPoint{0.0f, 0.0f};
+  float startAngle{0.0f}, endAngle{0.0f};  // 度（局部坐标系的切线方向）
+  float strokeWidth{1.0f};                 // markerUnits=strokeWidth 的缩放基准
+  bool hasStart{false}, hasEnd{false};
+};
+
+struct MarkerDef {
+  winrt::com_ptr<IMarkerView> view{nullptr};
+  winrt::Microsoft::ReactNative::ComponentView componentView{nullptr};
+};
+
 struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspectable, ISvgView> {
  public:
 
@@ -112,6 +158,10 @@ struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspect
   // RecurseRenderNode 遍历到 TSpan 时调用，收集文字记录供 Draw 用 DWrite 自绘。
   void AddTextRecord(TextRecord &&record) noexcept { m_textRecords.push_back(std::move(record)); }
 
+  // RecurseRenderNode 遍历到 RNSVGMarker / 带 marker 引用的元素时调用（绘图阶段收集）。
+  void AddMarkerDef(const winrt::com_ptr<IMarkerView> &view, const winrt::Microsoft::ReactNative::ComponentView &componentView) noexcept;
+  void AddMarkerRef(MarkerRefRecord &&record) noexcept { m_markerRefs.push_back(std::move(record)); }
+
  private:
   void Draw(
       const winrt::Microsoft::ReactNative::Composition::ViewComponentView &view,
@@ -124,6 +174,12 @@ struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspect
   void DrawTextRecords(
       const winrt::com_ptr<ID2D1DeviceContext> &deviceContext,
       winrt::Windows::Foundation::Size size) noexcept;
+  // 手动绘制 marker（箭头）：D2D1 不支持 <marker>，把 marker 内容画进独立
+  // SvgView 文档后按 SVG marker 语义（refX/refY + orient + markerUnits + viewBox
+  // 映射）放置到引用元素的端点上（DrawSvgDocument + DrawTextRecords 之后叠加）。
+  void DrawMarkerRecords(
+      const winrt::com_ptr<ID2D1DeviceContext> &deviceContext,
+      winrt::Windows::Foundation::Size size) noexcept;
 
   bool m_isMounted{false};
   winrt::Microsoft::ReactNative::Composition::Experimental::ISpriteVisual m_visual{nullptr};
@@ -133,6 +189,8 @@ struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspect
   D2D1_SVG_ASPECT_ALIGN m_aspectAlign;
   winrt::com_ptr<SvgViewProps> m_props;
   std::vector<TextRecord> m_textRecords;
+  std::vector<MarkerRefRecord> m_markerRefs;
+  std::unordered_map<std::wstring, MarkerDef> m_markerDefs;  // key = Marker 的 id
 
   // Shared
   Microsoft::ReactNative::IReactContext m_reactContext{nullptr};

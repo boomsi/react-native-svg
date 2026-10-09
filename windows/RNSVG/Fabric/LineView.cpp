@@ -47,6 +47,11 @@ struct LineView : winrt::implements<LineView, winrt::Windows::Foundation::IInspe
     element.SetAttributeValue(SvgStrings::x2AttributeName, props->x2);
     element.SetAttributeValue(SvgStrings::y2AttributeName, props->y2);
   }
+
+  MarkerRefs GetMarkerRefs() const noexcept override {
+    auto props = m_props.as<LineProps>();
+    return {props->markerStart, props->markerMid, props->markerEnd};
+  }
 };
 
 void RegisterLineComponent(const winrt::Microsoft::ReactNative::IReactPackageBuilderFabric &builder) noexcept {

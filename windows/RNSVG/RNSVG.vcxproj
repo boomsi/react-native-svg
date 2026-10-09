@@ -218,6 +218,7 @@
     <ClCompile Include="Fabric/ImageView.cpp" />
     <ClCompile Include="Fabric/LinearGradientView.cpp" />
     <ClCompile Include="Fabric/LineView.cpp" />
+    <ClCompile Include="Fabric/MarkerView.cpp" />
     <ClCompile Include="Fabric/PathView.cpp" />
     <ClCompile Include="Fabric/RadialGradientView.cpp" />
     <ClCompile Include="Fabric/RectView.cpp" />
