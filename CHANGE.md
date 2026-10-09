@@ -98,3 +98,55 @@ JS 发的是 number 数组）。且 `TSpanNativeComponent.ts` 的 x/y 类型没�
   `Fuse_Win/bin/x64/{Debug,Release}/` 与其下 `net10.0-*/win-x64(/AppX)` 的旧文件。
 - WSL interop（binfmt WSLInterop）在本机不稳定，会被反复冲掉；失效时从 Windows 侧
   重注册：`wsl -u root -- sh -c "echo ':WSLInterop:M::MZ::/init:PF' > /proc/sys/fs/binfmt_misc/register"`。
+
+## Windows Fabric：嵌套 <svg> 的 viewBox 从未生效（d2 图右缘被裁 + 文字变换累积死代码）
+
+### 问题原因
+
+d2 输出双层 svg：内层 `<svg viewBox="11 -1 112 255">` 带**非零 min-x/min-y**，
+内容坐标整体偏移 (11, -1)。`RecurseRenderNode` 的嵌套分支此前这样读子 SvgView 的 props：
+
+    auto nestedProps = child.UserData().try_as<IComponentProps>();
+    auto svgProps = nestedProps ? nestedProps.try_as<SvgViewProps>() : nullptr;
+
+`child.UserData()` 放的是 **SvgView 本身**（`implements<SvgView, IInspectable, ISvgView>`，
+props 存在它的私有 `m_props` 成员里），不实现 `IComponentProps` → 该 try_as **恒为
+null**。后果：
+
+- 内层 svg 的 viewBox/width/height 从未设到 D2D1 元素上 → 内层内容按原始坐标绘制，
+  被内层视口在右/上边缘裁掉 min-x/min-y 个单位 → **d2 图最右描边丢失、顶部描边削半**
+  （线上实测：内容偏移与 viewBox 偏移量完全吻合）；
+- 下面那段"嵌套 viewBox 变换累积进文字 transform"（nestedTextTransform）同样被
+  `if (svgProps)` 挡掉，成为死代码 → DWrite 文字也落在原始坐标。
+
+### 修改方案
+
+- `ISvgView` 增加 `Props()`（返回本 SvgView 的 `SvgViewProps`，`SvgView` 实现之）；
+  嵌套分支改经 `nestedSvg->Props()` 读取（SvgView.h/.cpp）。
+- 其余逻辑不变：设嵌套 svg 的 viewBox + width/height（=vbWidth/vbHeight，d2 如此）
+  后，D2D1 按 SVG 语义正确应用 min-x/min-y 平移并精确贴边；文字累积公式
+  `(nW − nvbW·ns)/2 − minX·ns` 与 D2D1 的映射一致，两者对齐。
+
+### 验证
+
+- 独立 D2D1 程序（同几何 439×1000，根 viewBox `0 0 112 255` + 内层 svg）四个变体：
+  - 内层 svg 不设属性（=修复前）：右描边整体缺失、底部边框画到视口右缘截断、
+    顶部描边只画一半 —— 与线上截图逐像素吻合；
+  - 内层 svg 设 viewBox+宽高（=本修复）：平移正确、右描边出现、内容精确贴满视口；
+  - 内层 svg 宽高 + `<g transform="translate(-11,1)">`、根 viewBox 直接带偏移：
+    同样正确（D2D1 根/嵌套 viewBox 的 min-x/min-y 语义均符合 SVG 规范）。
+- 待实机复测 d2 消息右缘。
+
+### RNR 时代的构建命令（替换上文 loom/CanvasSubsystem 版）
+
+    MSBuild.exe D:\Repo\Fuse_Win\windows\SparkNative.sln -t:RNSVG -restore \
+      -p:Configuration=Release -p:Platform=x64 -p:UseFabric=true -p:TargetName=RNSVGImpl -nologo -v:m
+
+产物落 `spark/windows/x64/Release/`（RNSVG.winmd + RNSVGImpl.dll）。源码单点:RNR 的
+`node_modules/react-native-svg` 是指向本仓的 junction（RNR package.json 以
+`link:../../react-native-svg` 声明，`scripts/link-local-packages.js` postinstall 维护，
+metro 配置已把本仓加入 watchFolders/blockList 并按 real 路径解析），改这里即构建源，
+不需再同步 node_modules。
+注意：`UseExperimentalNuget=false` 会让 RNSVG 触发对 RNW 源码工程的
+ProjectReference（Microsoft.ReactNative → fmt/Folly），首次/清理后构建需
+`-restore`（boost 走 NuGet）且耗时较长。

@@ -47,6 +47,11 @@ struct SvgViewProps : winrt::implements<SvgViewProps, winrt::Microsoft::ReactNat
 
 struct __declspec(uuid("ed381ffa-461a-48Bf-a3c0-5d9a42eecd30")) ISvgView : public ::IUnknown {
   virtual void Invalidate() = 0;
+  // 本 SvgView 当前的 props（minX/minY/vbWidth/vbHeight 等）。RecurseRenderNode
+  // 给嵌套 <svg> 建 D2D1 内层 svg 元素时要读子 SvgView 的 viewBox props —— 只能
+  // 从这里拿：child.UserData() 是 SvgView 本身（只实现 IInspectable/ISvgView），
+  // props 存在它的 m_props 成员里，try_as<IComponentProps>() 恒为 null。
+  virtual winrt::com_ptr<SvgViewProps> Props() = 0;
 };
 
 // DWrite 自绘文字记录：D2D1 SVG 不支持 text/tspan 元素，DrawSvgDocument 会忽略它们。
@@ -101,6 +106,7 @@ struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspect
   static void RegisterComponent(const winrt::Microsoft::ReactNative::IReactPackageBuilderFabric &builder) noexcept;
 
   void Invalidate();
+  winrt::com_ptr<SvgViewProps> Props() override { return m_props; }
   winrt::Microsoft::ReactNative::Composition::Theme Theme() const noexcept;
 
   // RecurseRenderNode 遍历到 TSpan 时调用，收集文字记录供 Draw 用 DWrite 自绘。

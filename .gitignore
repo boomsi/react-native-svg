@@ -54,3 +54,7 @@ experimental/
 # E2E reports
 jest-html-reporters-attach/
 report.html
+
+# Windows native build outputs (built from Fuse spark SparkNative.sln via junction)
+windows/RNSVG/obj/
+windows/RNSVG/x64/
