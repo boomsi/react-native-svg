@@ -265,10 +265,13 @@ void RecurseRenderNode(
         svgElement.CreateChild(L"svg", nestedElem.put());
         if (nestedElem) {
           // 设嵌套 svg 的 viewBox + width/height（用嵌套 SvgView 的 props）。
-          // d2 内层 svg 带 viewBox="-101 -101 702 1079"（负 offset），不设的话
-          // D2D1 不建立内层坐标系，内层 shape/text 坐标全部错位（有框没文本）。
-          auto nestedProps = child.UserData().try_as<winrt::Microsoft::ReactNative::IComponentProps>();
-          auto svgProps = nestedProps ? nestedProps.try_as<SvgViewProps>() : nullptr;
+          // d2 内层 svg 带 viewBox（如 "11 -1 112 255"，带非零 min-x/min-y），
+          // 不设的话 D2D1 不建立内层坐标系，内容按原始坐标绘制、被视口裁掉
+          // min-x 个单位（d2 图右缘描边丢失的根因）。
+          // props 必须经 ISvgView::Props() 拿：child.UserData() 是 SvgView 本身
+          // （只实现 IInspectable/ISvgView），此前 try_as<IComponentProps>() 恒为
+          // null，这段设置从未生效（含下面的文字变换累积）。
+          auto svgProps = nestedSvg->Props();
           if (svgProps) {
             if (svgProps->vbWidth || svgProps->vbHeight) {
               std::wstring vb = std::to_wstring(svgProps->minX.value_or(0)) + L" " +
