@@ -179,10 +179,13 @@ d2 / mermaid / plantuml / graphviz 等用 `<marker>` 定义 + `marker-start/mid/
 - `DrawMarkerRecords`（在 DrawSvgDocument + 文字叠加之后）：marker 子树渲染进独立
   D2D1 文档（root 尺寸 = marker 视口、viewBox = 定义值），按 SVG marker 语义放置：
 
-      translate(端点) · rotate(orient) · scale(markerUnits) · translate(-refV)
+      translate(-refV) → scale(markerUnits) → rotate(orient) → translate(端点)
 
   orient 支持 auto / auto-start-reverse / 固定角度（可带 deg）；refX/refY 按默认
   xMidYMid meet 经 viewBox→视口映射；最终经元素累积变换 × 根 viewBox 映射绘制。
+  **坑**：D2D1 矩阵乘法 `A * B` 的语义是“先 A 后 B”（行向量），放置矩阵必须按
+  上述应用顺序从前往后写；按常见直觉反着写会把 marker 变换到画布外（实测：
+  箭头消失、无任何报错，用独立 D2D1 程序逐项验证后定位）。
 
 ### 已知限制
 
@@ -192,5 +195,7 @@ d2 / mermaid / plantuml / graphviz 等用 `<marker>` 定义 + `marker-start/mid/
 
 ### 验证
 
-- RNSVG.vcxproj 编译通过（RNSVGImpl.dll 743,936B）。
-- 实机：待 Fuse 复测 d2 图箭头（database 侧应出现箭头，方向沿弧线切线）。
+- RNSVG.vcxproj 编译通过。
+- 独立 D2D1 程序验证：文档映射→上下文变换的合成方向、SetTransform 对
+  DrawSvgDocument 生效、同文档多实例复用安全。
+- 实机（2026-10-09）：d2 图两端箭头正常显示，方向沿弧线切线。

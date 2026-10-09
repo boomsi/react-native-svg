@@ -738,11 +738,13 @@ void SvgView::DrawMarkerRecords(
 
       float markerScale = attrs.strokeWidthUnits ? record.strokeWidth : 1.0f;
 
-      // 放置矩阵（引用元素的局部坐标系）：translate(端点)·rotate(orient)·scale(markerUnits)·translate(-ref)
-      auto placement = D2D1::Matrix3x2F::Translation(slot.point.x, slot.point.y) *
-          D2D1::Matrix3x2F::Rotation(angle) *
+      // 放置矩阵（输入=marker 视口坐标，输出=引用元素局部坐标）。
+      // D2D1 的 A*B 语义是"先 A 后 B"（行向量），按 SVG 语义的顺序合成：
+      // translate(-ref) → scale(markerUnits) → rotate(orient) → translate(端点)。
+      auto placement = D2D1::Matrix3x2F::Translation(-refX, -refY) *
           D2D1::Matrix3x2F::Scale(markerScale, markerScale) *
-          D2D1::Matrix3x2F::Translation(-refX, -refY);
+          D2D1::Matrix3x2F::Rotation(angle) *
+          D2D1::Matrix3x2F::Translation(slot.point.x, slot.point.y);
 
       // marker 文档内部自带 viewBox→视口映射，故上下文变换 = 放置·元素累积变换·根viewBox映射·既有变换。
       deviceContext->SetTransform(placement * record.accumulatedTransform * vbTransform * baseTransform);
