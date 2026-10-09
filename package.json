@@ -1,5 +1,5 @@
 {
-  "version": "15.15.5",
+  "version": "15.15.6",
   "name": "@boomsi/react-native-svg",
   "description": "SVG library for react-native — fork of react-native-svg with Windows Fabric text rendering fixes",
   "homepage": "https://github.com/boomsi/react-native-svg#readme",
