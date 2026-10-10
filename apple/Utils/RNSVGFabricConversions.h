@@ -55,6 +55,19 @@ static id RNSVGConvertFollyDynamicToId(const folly::dynamic &dyn)
   }
 }
 
+// The Text / TSpan JS specs declare x / y / dx / dy / rotate as
+// ReadonlyArray<Float> (upstream declares them UnsafeMixed), so codegen hands
+// those fields over as std::vector<Float> while every other array prop stays a
+// folly::dynamic. Both overloads are needed for the shared text props code.
+static id RNSVGConvertFollyDynamicToId(const std::vector<facebook::react::Float> &values)
+{
+  NSMutableArray *array = [[NSMutableArray alloc] initWithCapacity:values.size()];
+  for (const auto &value : values) {
+    [array addObject:@(value)];
+  }
+  return array;
+}
+
 static const facebook::react::LayoutMetrics MinimalLayoutMetrics = {{{0, 0}, {1, 1}}};
 
 template <typename T>

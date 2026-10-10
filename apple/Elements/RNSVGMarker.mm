@@ -104,6 +104,14 @@ using namespace facebook::react;
   return nil;
 }
 
+- (void)renderTo:(CGContextRef)context rect:(CGRect)rect
+{
+  // <marker> is a definition, not content: its shapes are painted exclusively
+  // through renderMarker (marker-start / -mid / -end). d2 and mermaid emit
+  // their markers outside <defs>, so without this override the arrowheads were
+  // painted into the document flow at the canvas origin.
+}
+
 - (void)parseReference
 {
   self.dirty = false;

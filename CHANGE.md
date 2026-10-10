@@ -199,3 +199,115 @@ d2 / mermaid / plantuml / graphviz 等用 `<marker>` 定义 + `marker-start/mid/
 - 独立 D2D1 程序验证：文档映射→上下文变换的合成方向、SetTransform 对
   DrawSvgDocument 生效、同文档多实例复用安全。
 - 实机（2026-10-09）：d2 图两端箭头正常显示，方向沿弧线切线。
+## `<marker>` 被当作可见图形渲染（画布左上角出现箭头/黑块伪影）
+
+### 问题原因
+
+SVG 规范中 `<marker>` 是定义元素、自身不渲染，只在 `marker-start/-mid/-end` 引用时使用，
+但 d2 与 mermaid 的输出都把 `<marker>` 直接放在文档流里（不在 `<defs>` 内），而
+`RNSVGMarker : RNSVGGroup : RNSVGPath : RNSVGRenderable` 且**没有重写 `renderTo:rect:`**
+→ 继承 Renderable 的实现，被父级遍历时作为普通图形绘制：marker 里的
+`<path>` / `<polygon>` / `<circle>` 全部落在画布原点 (0,0)。
+
+- d2（每条边一个 marker）：左上角多一个三角形；
+- mermaid（flowchart-v2 的 pointStart / pointEnd / circleEnd 等多个 marker）：左上角一团重叠黑块。
+
+（Windows 不受影响：`MarkerView::Draw` 本就是空实现，且该平台另有独立的手动绘制方案。）
+
+### 修改方案
+
+`RNSVGMarker` 重写 `renderTo:rect:` 为空。marker 只能经 `renderMarker` 绘制——它内部
+直接调 `renderGroupTo`、不经过 `renderTo`，箭头不受影响。拦截放在 marker 自身而非
+父级遍历里，可同时覆盖「`<g>` 内」与「直接挂在 `<svg>` 下」两种情形。
+
+### 验证
+
+macOS（Fuse）实机：mermaid 左上角黑块消失、图形恢复正常；d2 的箭头仍在正确位置。
+
+## mask 元素的内容整体消失（d2 连线丢失）
+
+### 问题原因
+
+d2 给每条 connection 的 path 都加了 `mask="url(#…)"`（用于连接标签处给连线挖洞，
+无标签时 mask 内容为全白覆盖）。这些 path 完全不渲染——表现为 d2 图只剩节点框和
+箭头（箭头由 `renderMarkers` 在 mask 之外单独绘制，因而幸存）。mermaid 不输出 mask，
+所以一直正常。
+
+根因是**离屏 bitmap 的尺寸比内容实际占用的设备像素小**，而 `rect` 参数在不同层级下
+语义不同：
+
+- `RNSVGSvgView` 给**顶层**子节点传的是自己的 bounds（**点**）；
+- 嵌套 `<svg>` 给它的子节点传的是该 svg 的 rect（**用户坐标**）。
+
+原实现一律用 `rect × getScreenScale()`（backing scale）定尺寸——对顶层恰好等于
+"view 设备尺寸"✓；但 **d2 输出双层嵌套 `<svg>`**，其 connection path 是嵌套节点，
+`rect` 是内层 svg 的用户坐标尺寸（55×234），而 CTM 里还含外层 viewBox 放大
+（≈3.64×），内容实际要占 `rect × 3.64 × backing ≈ 7.3 倍`的像素——bitmap 只有 2 倍，
+内容整体落到 bitmap 之外，mask 合成后为空。macOS 分支还额外假设 "currentCTM 不含
+backing scale" 手动补了一次 `MakeScale`（bcontext 上是 `screenScaleCTM`），在 Fabric
+下进一步放大偏差。
+
+mermaid 无嵌套 svg（`rect` 即 view 尺寸）→ 一直正常；不带 mask 的元素直接画在主
+context 上，不经过离屏路径，所以框始终正常。iOS 侧 `rect` 的传递方式相同，
+同样受此影响（待 iOS 实机验证）。
+
+复现：把该分支的 CTM 序列抽成独立 CoreGraphics 程序，构造 "rect=内层 svg 尺寸 +
+CTM 含 viewBox 放大" 的场景——「bitmap = rect × backing」精确复现"框在、线无"；
+「bitmap = rect × scaleOf(CTM)」连线完整。
+
+### 修改方案
+
+按节点的层级选择把 `rect` 换算成设备像素的缩放，并据此统一三处离屏 bitmap
+（content / mask / blend）的尺寸：
+
+- 顶层（`superview` 是 `RNSVGSvgView`）：`rect` 是点 → `scale = getScreenScale()`（原行为）。
+- 嵌套：`rect` 是用户坐标 → `scale = scaleOf(currentCTM)`（CTM 实测缩放）。
+- 新增 `RNSVGRenderUtils.scaleOf:`（`sqrt(|det|)`）与 `renderToImage:…scale:` 参数。
+- bcontext 只拼接 CTM、删除 `screenScaleCTM` / `MakeScale` 补偿（自动补偿会把内容
+  推出 bitmap）。
+- 画回统一收敛到 `drawBackImage:rect:ctm:scaled:topLevel:inContext:`：顶层保持历史的
+  y-down 放置，嵌套用 `rect` 经 CTM 映射的 layer 矩形（该变换还带 view 的偏移，
+  纯尺寸放置无法表达）。
+
+注：中途曾尝试用 `CGContextGetClipBoundingBox` 作为尺寸基准，但该值在 Fabric 的
+layer 绘制上下文里为 null/零尺寸（此前只喂给 mask 渲染、无人依赖），会导致
+`CGBitmapContextCreate` 返回 NULL 并在 `RNSVGUIGraphicsEndImageContext` 断言崩溃——
+已放弃该路径，最终方案只依赖始终有效的 `rect`。
+
+### 附带修复：作为 <svg> 直接子节点的 mask / clipPath 被当内容绘制
+
+`RNSVGGroup.renderGroupTo` 一直有守卫（mask / clipPath 子节点只继承属性、不绘制），
+但 **`RNSVGSvgView.drawToContext` 的子节点遍历没有** —— 而 d2 的输出正是
+`<svg>…<mask>…</mask></svg>`（mask 挂在内层 svg 下），且
+`RNSVGMask : RNSVGGroup : RNSVGPath : RNSVGRenderable` 拥有完整的 `renderTo`
+→ mask 的形状（白色底 + 黑色挖洞矩形）被直接画在图上：**白色盖住连线**，
+残留的浅色竖条即真机上看到的"诡异竖线"。
+
+修法：SvgView 遍历同样跳过 mask / clipPath 的**绘制**，但**保留 `parseReference`**
+——定义必须先注册，否则 `getDefinedMask` 取不到它（这是"改了没效果 / 时好时坏"的
+直接原因：把 `continue` 放在 `parseReference` 之前会连带跳过注册）。
+
+### 验证
+
+macOS（Fuse）实机（2026-10-10）：d2 的 `a -> b` 与两条带标签连线均正常显示、标签挖洞
+位置正确；"诡异竖线"（被误画的 mask 白底）消失；mermaid 无回归。
+
+## Apple 平台编译修复：codegen 的 std::vector<Float> 与手写转换不匹配
+
+### 问题原因
+
+Windows Fabric 修复把 `TextNativeComponent` / `TSpanNativeComponent` 的
+`x/y/dx/dy/rotate` 从 `UnsafeMixed<NumberArray>` 改为 `ReadonlyArray<Float>`，
+codegen 因此为这五个字段生成 `std::vector<Float>`；而 `RNSVGFabricConversions.h` 的
+`setCommonTextProps` 仍用 `RNSVGConvertFollyDynamicToId(textProps.x)`（只接受
+`folly::dynamic`）→ **Apple 平台整体编译失败**（`no matching function for call`，
+报在 `setCommonTextProps` 的 dx/dy/x/y/rotate 五行上）。
+
+即：在此之前 fork 只在 Windows 上构建过，README 原先"iOS / macOS 与上游一致"的说法
+实际不成立——macOS 接入（link 本地 fork）时首先撞上的就是这个编译错误。
+
+### 修改方案
+
+给 `RNSVGConvertFollyDynamicToId` 增加 `const std::vector<facebook::react::Float> &`
+重载（转成 `NSArray<NSNumber *>`）。`inlineSize` / `textLength` 等仍是 `UnsafeMixed`
+（`folly::dynamic`），原重载继续覆盖；`matrix` 等本就是 vector 的字段不受影响。

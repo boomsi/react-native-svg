@@ -15,6 +15,7 @@
 #import "RNSVGMarkerPosition.h"
 #import "RNSVGMask.h"
 #import "RNSVGRenderUtils.h"
+#import "RNSVGSvgView.h"
 #import "RNSVGVectorEffect.h"
 #import "RNSVGViewBox.h"
 
@@ -250,6 +251,22 @@ UInt32 saturate(CGFloat value)
   return value <= 0 ? 0 : value >= 255 ? 255 : (UInt32)value;
 }
 
+/**
+ * Draws an offscreen bitmap back into the layer. `deviceRect` is where the
+ * bitmap belongs in window space (the content area mapped through the CTM,
+ * which includes the view's own offset). The CTM is inverted to identity
+ * (window space) for the draw, then the caller restores it when it keeps
+ * drawing.
+ */
+- (void)drawBackImage:(CGImageRef)image
+           deviceRect:(CGRect)deviceRect
+                  ctm:(CGAffineTransform)currentCTM
+            inContext:(CGContextRef)context
+{
+  CGContextConcatCTM(context, CGAffineTransformInvert(currentCTM));
+  CGContextDrawImage(context, deviceRect, image);
+}
+
 - (void)renderTo:(CGContextRef)context rect:(CGRect)rect
 {
   self.dirty = false;
@@ -270,21 +287,36 @@ UInt32 saturate(CGFloat value)
 
     CGFloat height = rect.size.height;
     CGFloat width = rect.size.width;
-    CGFloat scale = [RNSVGRenderUtils getScreenScale];
-    NSUInteger iheight = (NSUInteger)height;
-    NSUInteger iwidth = (NSUInteger)width;
-    NSUInteger iscale = (NSUInteger)scale;
-    NSUInteger scaledHeight = iheight * iscale;
-    NSUInteger scaledWidth = iwidth * iscale;
+    // `rect` comes from the parent and lives in its space: SvgView hands its
+    // bounds in *points* to top-level nodes, while a node inside a nested
+    // <svg> receives that svg's *user-space* rect. Pick the scale that turns
+    // the rect's space into device pixels accordingly. The CTM maps user
+    // space, so a nested node's content occupies `rect × scaleOf(CTM)` — with
+    // only the backing scale the bitmap came out undersized and the content
+    // (d2's masked connection lines) fell outside it.
+    BOOL topLevel = [self.superview isKindOfClass:[RNSVGSvgView class]];
+    CGFloat scale = topLevel ? [RNSVGRenderUtils getScreenScale] : [RNSVGRenderUtils scaleOf:currentCTM];
+    NSUInteger scaledWidth = (NSUInteger)ceil(width * scale);
+    NSUInteger scaledHeight = (NSUInteger)ceil(height * scale);
     NSUInteger npixels = scaledHeight * scaledWidth;
     CGAffineTransform screenScaleCTM = CGAffineTransformMake(scale, 0, 0, scale, 0, 0);
     CGRect scaledRect = CGRectApplyAffineTransform(rect, screenScaleCTM);
 
-#if TARGET_OS_OSX
-    CGImage *contentImage = [RNSVGRenderUtils renderToImage:self ctm:currentCTM rect:scaledRect clip:nil];
-#else
-    CGImage *contentImage = [RNSVGRenderUtils renderToImage:self ctm:currentCTM rect:rect clip:nil];
-#endif
+    // The CTM maps user space all the way into the window, *including the
+    // view's own offset* (measured on-device: tx ≈ 166–240, i.e. the view's x
+    // in its window). An offscreen bitmap starts at its own origin, so content
+    // drawn with the raw CTM lands at that offset — outside the bitmap, which
+    // left content and mask images empty (masked strokes never appeared).
+    // Shift the drawing CTM so the content area's top-left sits at the
+    // bitmap's origin, and remember where the bitmap belongs in window space.
+    CGPoint contentOrigin = CGPointApplyAffineTransform(CGPointZero, currentCTM);
+    CGRect deviceRect = CGRectMake(contentOrigin.x, contentOrigin.y, scaledWidth, scaledHeight);
+    CGAffineTransform contentCTM = currentCTM;
+    contentCTM.tx -= contentOrigin.x;
+    contentCTM.ty -= contentOrigin.y;
+
+    CGImage *contentImage = [RNSVGRenderUtils renderToImage:self ctm:contentCTM rect:rect scale:scale clip:nil];
+
 
     if (filterNode) {
       // https://www.w3.org/TR/SVG11/filters.html#FilterElement
@@ -298,20 +330,15 @@ UInt32 saturate(CGFloat value)
       content = [filterNode applyFilter:content
                           backgroundImg:background
                        renderableBounds:self.pathBounds
-                           canvasBounds:scaledRect
-                                    ctm:currentCTM];
+                           canvasBounds:CGRectMake(0, 0, scaledWidth, scaledHeight)
+                                    ctm:contentCTM];
 
       CGImageRelease(contentImage);
-      contentImage = [[RNSVGRenderUtils sharedCIContext] createCGImage:content fromRect:scaledRect];
+      contentImage = [[RNSVGRenderUtils sharedCIContext] createCGImage:content
+                                                          fromRect:CGRectMake(0, 0, scaledWidth, scaledHeight)];
 
       if (!maskNode) {
-        CGContextConcatCTM(context, CGAffineTransformInvert(currentCTM));
-#if TARGET_OS_OSX
-        CGContextDrawImage(context, rect, contentImage);
-#else
-        CGContextDrawImage(context, scaledRect, contentImage);
-#endif
-
+        [self drawBackImage:contentImage deviceRect:deviceRect ctm:currentCTM inContext:context];
         CGContextConcatCTM(context, currentCTM);
       }
 
@@ -329,11 +356,10 @@ UInt32 saturate(CGFloat value)
       CGBitmapInfo bitmapInfo = (CGBitmapInfo)kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big;
       CGContextRef bcontext = CGBitmapContextCreate(
           pixels, scaledWidth, scaledHeight, bitsPerComponent, bytesPerRow, colorSpace, bitmapInfo);
-#if TARGET_OS_OSX // [macOS]
-      // on macOS currentCTM is not scaled properly with screen scale so we need to scale it manually
-      CGContextConcatCTM(bcontext, screenScaleCTM);
-#endif // [macOS]
-      CGContextConcatCTM(bcontext, currentCTM);
+      // Concatenating the shifted CTM alone maps the content onto the bitmap
+      // exactly; the hand-applied screen scale this used to add on macOS, and
+      // the raw (unshifted) CTM, both pushed the content out of it.
+      CGContextConcatCTM(bcontext, contentCTM);
       // Clip to mask bounds and render the mask
       CGRect maskBounds;
       if ([maskNode maskUnits] == RNSVGUnits::kRNSVGUnitsUserSpaceOnUse) {
@@ -376,8 +402,13 @@ UInt32 saturate(CGFloat value)
       CGContextRelease(bcontext);
       free(pixels);
 
+      // Both bitmaps are aligned to their own origin, so blending them is a
+      // plain 1:1 composite within the rect's space.
+      CGRect local = {CGPointZero, rect.size};
+
 #if !TARGET_OS_OSX // [macOS]
       UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+      format.scale = scale;
       UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:rect.size format:format];
 
       // Blend current element and mask
@@ -387,38 +418,26 @@ UInt32 saturate(CGFloat value)
         CGContextConcatCTM(rendererContext.CGContext, screenScaleCTM);
 
         CGContextSetBlendMode(rendererContext.CGContext, kCGBlendModeCopy);
-        CGContextDrawImage(rendererContext.CGContext, rect, maskImage);
+        CGContextDrawImage(rendererContext.CGContext, local, maskImage);
         CGContextSetBlendMode(rendererContext.CGContext, kCGBlendModeSourceIn);
-        CGContextDrawImage(rendererContext.CGContext, rect, contentImage);
+        CGContextDrawImage(rendererContext.CGContext, local, contentImage);
       }];
 
-      // Invert the CTM and apply transformations to draw image in 1:1
-      CGContextConcatCTM(context, CGAffineTransformInvert(currentCTM));
-      CGContextTranslateCTM(context, 0.0, scaledRect.size.height);
-      CGContextScaleCTM(context, 1.0, -1.0);
-
-      // Render blended result into current render context
-      [blendedImage drawInRect:scaledRect];
+      [self drawBackImage:blendedImage.CGImage deviceRect:deviceRect ctm:currentCTM inContext:context];
 #else // [macOS
       // Blend current element and mask
       RNSVGUIGraphicsBeginImageContextWithOptions(rect.size, NO, scale);
       CGContextRef newContext = UIGraphicsGetCurrentContext();
 
       CGContextSetBlendMode(newContext, kCGBlendModeCopy);
-      CGContextDrawImage(newContext, rect, maskImage);
+      CGContextDrawImage(newContext, local, maskImage);
       CGContextSetBlendMode(newContext, kCGBlendModeSourceIn);
-      CGContextDrawImage(newContext, rect, contentImage);
+      CGContextDrawImage(newContext, local, contentImage);
 
       CGImageRef blendedImage = CGBitmapContextCreateImage(newContext);
       RNSVGUIGraphicsEndImageContext();
 
-      // Invert the CTM and apply transformations to draw image in 1:1
-      CGContextConcatCTM(context, CGAffineTransformInvert(currentCTM));
-      CGContextTranslateCTM(context, 0.0, rect.size.height);
-      CGContextScaleCTM(context, 1.0, -1.0);
-
-      // Render blended result into current render context
-      CGContextDrawImage(context, rect, blendedImage);
+      [self drawBackImage:blendedImage deviceRect:deviceRect ctm:currentCTM inContext:context];
       CGImageRelease(blendedImage);
 #endif // macOS]
       CGImageRelease(maskImage);

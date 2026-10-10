@@ -8,6 +8,8 @@
 
 #import "RNSVGSvgView.h"
 #import <React/RCTLog.h>
+#import "RNSVGClipPath.h"
+#import "RNSVGMask.h"
 #import "RNSVGNode.h"
 #import "RNSVGViewBox.h"
 
@@ -315,7 +317,14 @@ using namespace facebook::react;
         self.responsible = YES;
       }
 
+      // Definitions reach us as direct <svg> children too (d2 puts <mask>
+      // right there): register them, but never paint them as document
+      // content — same guard as RNSVGGroup.renderGroupTo. Without it their
+      // shapes (white sheet + black punch-outs) were painted over the diagram.
       [svg parseReference];
+      if ([node isKindOfClass:[RNSVGMask class]] || [node isKindOfClass:[RNSVGClipPath class]]) {
+        continue;
+      }
       [svg renderTo:context rect:rect];
     } else {
       [node drawRect:rect];

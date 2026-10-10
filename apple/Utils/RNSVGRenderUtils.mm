@@ -30,22 +30,27 @@
   return scale;
 }
 
++ (CGFloat)scaleOf:(CGAffineTransform)transform
+{
+  CGFloat determinant = transform.a * transform.d - transform.b * transform.c;
+  CGFloat scale = sqrt(fabs(determinant));
+  return scale > 0 ? scale : 1.0;
+}
+
 + (CGImage *)renderToImage:(RNSVGRenderable *)renderable
                        ctm:(CGAffineTransform)ctm
                       rect:(CGRect)rect
+                    scale:(CGFloat)scale
                       clip:(CGRect *)clip
 {
-  CGFloat scale = [self getScreenScale];
-#if TARGET_OS_OSX // [macOS
-  RNSVGUIGraphicsBeginImageContextWithOptions(rect.size, NO, 1.0);
-#else // macOS]
+  // The bitmap is sized in device pixels for `rect`'s space (the caller picks
+  // `scale`: the backing scale for a top-level node whose rect is in points,
+  // the CTM's own scale for a nested node whose rect is in user space — d2
+  // emits nested svgs, and its connection paths are masked). Concatenating the
+  // CTM then lands the content on the bitmap exactly.
   RNSVGUIGraphicsBeginImageContextWithOptions(rect.size, NO, scale);
-#endif // [macOS]
   CGContextRef cgContext = UIGraphicsGetCurrentContext();
   CGContextConcatCTM(cgContext, CGAffineTransformInvert(CGContextGetCTM(cgContext)));
-#if TARGET_OS_OSX // [macOS
-  CGContextConcatCTM(cgContext, CGAffineTransformMakeScale(scale, scale));
-#endif // macOS]
   CGContextConcatCTM(cgContext, ctm);
 
   if (clip) {
