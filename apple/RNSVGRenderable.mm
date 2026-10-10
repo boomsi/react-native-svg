@@ -309,7 +309,13 @@ UInt32 saturate(CGFloat value)
     // left content and mask images empty (masked strokes never appeared).
     // Shift the drawing CTM so the content area's top-left sits at the
     // bitmap's origin, and remember where the bitmap belongs in window space.
-    CGPoint contentOrigin = CGPointApplyAffineTransform(CGPointZero, currentCTM);
+    //
+    // The shift must come from the content's *bounding box* in device space,
+    // not from the image of (0,0): with a flipped CTM (UIKit, d < 0) the image
+    // of (0,0) is the box's top corner, so shifting by it pushed the content
+    // below the bitmap (measured: content image empty on iOS only).
+    CGRect contentBox = CGRectApplyAffineTransform(rect, currentCTM);
+    CGPoint contentOrigin = contentBox.origin;
     CGRect deviceRect = CGRectMake(contentOrigin.x, contentOrigin.y, scaledWidth, scaledHeight);
     CGAffineTransform contentCTM = currentCTM;
     contentCTM.tx -= contentOrigin.x;

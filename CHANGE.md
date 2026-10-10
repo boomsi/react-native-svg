@@ -265,6 +265,10 @@ CTM 含 viewBox 放大" 的场景——「bitmap = rect × backing」精确复�
 - 新增 `RNSVGRenderUtils.scaleOf:`（`sqrt(|det|)`）与 `renderToImage:…scale:` 参数。
 - bcontext 只拼接 CTM、删除 `screenScaleCTM` / `MakeScale` 补偿（自动补偿会把内容
   推出 bitmap）。
+- 位图平移量取「内容区域经 CTM 的**包围盒 origin**」，而不是「用户原点 (0,0) 经 CTM 的像」——
+  后者只对无翻转的 CTM 成立（macOS，d > 0）；UIKit 的 CTM 含翻转（d < 0）时它是包围盒的**上角**，
+  会把内容平移到负方向、整体落到位图之外。实测（独立 CG 复现）：iOS 场景下 content 位图
+  `nonEmpty=0`，改为包围盒 origin 后正常（15000）。
 - 画回统一收敛到 `drawBackImage:rect:ctm:scaled:topLevel:inContext:`：顶层保持历史的
   y-down 放置，嵌套用 `rect` 经 CTM 映射的 layer 矩形（该变换还带 view 的偏移，
   纯尺寸放置无法表达）。
