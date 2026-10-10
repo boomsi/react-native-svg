@@ -1,6 +1,6 @@
 # @boomsi/react-native-svg
 
-> A personal fork of [`react-native-svg`](https://www.npmjs.com/package/react-native-svg) ([software-mansion/react-native-svg](https://github.com/software-mansion/react-native-svg)) with fixes for **text rendering on the Windows Fabric (new architecture) renderer**. Behavior on iOS / Android / macOS and on the legacy Windows (Paper) renderer is identical to upstream.
+> A personal fork of [`react-native-svg`](https://www.npmjs.com/package/react-native-svg) ([software-mansion/react-native-svg](https://github.com/software-mansion/react-native-svg)) with fixes for **text / marker rendering on the Windows Fabric (new architecture) renderer**, and for **marker definitions and mask compositing on Apple platforms** (`<marker>` painted as content at the canvas origin; masked elements losing their content on macOS Fabric). Behavior on Android and on the legacy Windows (Paper) renderer is identical to upstream.
 
 ## Base version
 
@@ -16,6 +16,11 @@ The Windows Fabric renderer draws the whole document through D2D1's `ID2D1SvgDoc
 - **`dominant-baseline` / `alignment-baseline`**: supports central/middle, text-before-edge/hanging and text-after-edge/bottom vertical positioning; defaults to alphabetic.
 - **Nested `<svg>`**: the Fabric path used to skip the whole subtree; nested svgs are now supported and their viewBox transforms accumulate into the text transform.
 - **JS-side prop type fixes**: `x/y/dx/dy/rotate` in `TextNativeComponent` / `TSpanNativeComponent` changed from `UnsafeMixed<NumberArray>` to `ReadonlyArray<Float>` to match the native `std::vector<float>`.
+
+### Apple platforms
+
+- **`<marker>` is no longer painted as content**: `RNSVGMarker` overrides `renderTo:rect:` with a no-op. Markers are definitions and must only be drawn through `marker-start/-mid/-end`; d2 and mermaid both emit their `<marker>` elements outside `<defs>`, which left the arrowhead shapes painted into the document flow at the canvas origin.
+- **Mask compositing (Apple platforms)**: offscreen bitmaps were sized from `rect` × the backing scale, which under-sizes them for nodes inside a nested `<svg>` — `rect` is in the parent's *user space* there while the CTM additionally applies the outer viewBox scale, so with d2's nested svgs the masked connection lines fell outside the bitmap and vanished (arrowheads survived, as they render outside the mask). macOS also multiplied the backing scale in by hand on top of that. Offscreen bitmaps are now sized per node depth — `rect × getScreenScale()` for top-level nodes (rect in points, unchanged), `rect × scaleOf(CTM)` for nested nodes — with the blend drawn back through a single placement helper (`drawBackImage:…`).
 
 Full design notes, root-cause analysis and the Windows build commands live in [CHANGE.md](./CHANGE.md) (in Chinese).
 
