@@ -40,6 +40,11 @@ struct PathView : winrt::implements<PathView, winrt::Windows::Foundation::IInspe
         D2D1_SVG_ATTRIBUTE_STRING_TYPE::D2D1_SVG_ATTRIBUTE_STRING_TYPE_SVG,
         props->d.c_str());
   }
+
+  MarkerRefs GetMarkerRefs() const noexcept override {
+    auto props = m_props.as<PathProps>();
+    return {props->markerStart, props->markerMid, props->markerEnd};
+  }
 };
 
 void RegisterPathComponent(const winrt::Microsoft::ReactNative::IReactPackageBuilderFabric &builder) noexcept {

@@ -58,6 +58,12 @@ HRESULT SetColorMode(
   std::optional<float> opacity;                                \
   REACT_FIELD(matrix)                                          \
   std::optional<std::vector<float>> matrix;                    \
+  REACT_FIELD(markerStart)                                     \
+  std::optional<std::wstring> markerStart;                     \
+  REACT_FIELD(markerMid)                                       \
+  std::optional<std::wstring> markerMid;                       \
+  REACT_FIELD(markerEnd)                                       \
+  std::optional<std::wstring> markerEnd;                       \
   REACT_FIELD(clipPath)                                        \
   std::optional<std::wstring> clipPath;                        \
   REACT_FIELD(clipRule)                                        \
@@ -98,6 +104,9 @@ HRESULT SetColorMode(
        name = cloneFromProps->name;                           \
        opacity = cloneFromProps->opacity;                     \
        matrix = cloneFromProps->matrix;                       \
+       markerStart = cloneFromProps->markerStart;             \
+       markerMid = cloneFromProps->markerMid;                 \
+       markerEnd = cloneFromProps->markerEnd;                 \
        clipPath = cloneFromProps->clipPath;                   \
        clipRule = cloneFromProps->clipRule;                   \
        fill = cloneFromProps->fill;                           \
@@ -238,6 +247,8 @@ struct __declspec(uuid("a03986c0-b06e-4fb8-a86e-16fcc47b2f31")) RenderableView :
   // 元素的 transform matrix（common props.matrix，6 元素）。RecurseRenderNode 累积父链
   // matrix 传给 text 的 RecordText，用于算 text 在 SVG 坐标系的位置。
   virtual std::optional<std::vector<float>> GetMatrix() const noexcept { return std::nullopt; }
+  // 元素自身的 marker 引用（Path/Line 等支持 marker 的元素覆盖；默认无）。
+  virtual MarkerRefs GetMarkerRefs() const noexcept { return {}; }
 
   void Invalidate(const winrt::Microsoft::ReactNative::ComponentView &view);
 

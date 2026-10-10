@@ -150,3 +150,52 @@ metro 配置已把本仓加入 watchFolders/blockList 并按 real 路径解析�
 注意：`UseExperimentalNuget=false` 会让 RNSVG 触发对 RNW 源码工程的
 ProjectReference（Microsoft.ReactNative → fmt/Folly），首次/清理后构建需
 `-restore`（boost 走 NuGet）且耗时较长。
+
+## Windows Fabric：marker（箭头）手动绘制（D2D1 不支持 <marker>）
+
+### 问题原因
+
+d2 / mermaid / plantuml / graphviz 等用 `<marker>` 定义 + `marker-start/mid/end="url(#id)"`
+引用画箭头。D2D1 的 `ID2D1SvgDocument` 不支持 `<marker>` 元素（整文档渲染静默忽略），
+上游原版在 Windows 上也从未实现（Paper 的 marker 处理是注释掉的 TODO；Fabric 把
+`RNSVGMarker` 注册成 UnsupportedSvgComponent）。结果：Windows 上所有图表的箭头全部
+丢失（iOS / Android / macOS 上游有完整实现，不受影响）。
+
+### 修改方案
+
+沿用"文字 DWrite 叠加"的思路，marker 也改为收集后手动绘制：
+
+- `RNSVGMarker` 从 UnsupportedSvgView 改为真实 `MarkerView`（Fabric/MarkerView.h/.cpp）：
+  只登记定义（refX/refY/markerWidth/Height/viewBox/markerUnits/orient + 子树），
+  不往主文档建元素。数值 props 兼容数字（JSX）与字符串（SvgXml 属性），复用
+  `D2D1_SVG_LENGTH` 的 ReadValue 特化。
+- 公共 props 宏增加 `markerStart/markerMid/markerEnd`（含 clone），
+  `RenderableView::GetMarkerRefs()` 虚函数由 Path/Line 覆盖。JS 侧无需改动
+  （`PathNativeComponent` 已带这三个 prop；`polygon`/`polyline` 在 JS 层就是 Path）。
+- `RecurseRenderNode` 收集两样东西：① marker 定义（IMarkerView 拦截，含"不放进 defs"
+  的根级兜底）；② 带引用的元素锚点——path 把 D2D1 元素上的 `d` 取回
+  `ID2D1SvgPathData` → `ID2D1PathGeometry1` 按弧长采样首/末端点 + 切线；line 读
+  x1..y2；都记元素局部坐标 + 累积变换 + stroke-width。
+- `DrawMarkerRecords`（在 DrawSvgDocument + 文字叠加之后）：marker 子树渲染进独立
+  D2D1 文档（root 尺寸 = marker 视口、viewBox = 定义值），按 SVG marker 语义放置：
+
+      translate(-refV) → scale(markerUnits) → rotate(orient) → translate(端点)
+
+  orient 支持 auto / auto-start-reverse / 固定角度（可带 deg）；refX/refY 按默认
+  xMidYMid meet 经 viewBox→视口映射；最终经元素累积变换 × 根 viewBox 映射绘制。
+  **坑**：D2D1 矩阵乘法 `A * B` 的语义是“先 A 后 B”（行向量），放置矩阵必须按
+  上述应用顺序从前往后写；按常见直觉反着写会把 marker 变换到画布外（实测：
+  箭头消失、无任何报错，用独立 D2D1 程序逐项验证后定位）。
+
+### 已知限制
+
+- `marker-mid` 未实现（d2/mermaid/plantuml/graphviz 的箭头都在路径两端）。
+- marker 子内容里的 text/tspan 不绘制（与主文档同一限制，marker 内极罕见）。
+- Paper（旧架构）未动，仍不显示 marker。
+
+### 验证
+
+- RNSVG.vcxproj 编译通过。
+- 独立 D2D1 程序验证：文档映射→上下文变换的合成方向、SetTransform 对
+  DrawSvgDocument 生效、同文档多实例复用安全。
+- 实机（2026-10-09）：d2 图两端箭头正常显示，方向沿弧线切线。

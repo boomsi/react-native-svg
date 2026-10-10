@@ -1,9 +1,11 @@
 #include "pch.h"
 
 #include "SvgView.h"
+#include "MarkerView.h"
 
 #include "D2DHelpers.h"
 #include "GroupView.h"
+#include <cmath>
 #include <dwrite.h>
 #include <d2d1.h>
 
@@ -219,6 +221,151 @@ void SvgView::UpdateLayoutMetrics(
   }
 }
 
+void SvgView::AddMarkerDef(
+    const winrt::com_ptr<IMarkerView> &view,
+    const winrt::Microsoft::ReactNative::ComponentView &componentView) noexcept {
+  auto attrs = view->Attrs();
+  if (attrs.name.empty()) {
+    return; // 无名 marker 无法被 url(#id) 引用
+  }
+  MarkerDef def;
+  def.view = view;
+  def.componentView = componentView;
+  m_markerDefs[attrs.name] = std::move(def);
+}
+
+// ---- marker（箭头）手动绘制：D2D1 不支持 <marker>，整文档渲染会静默忽略 ----
+
+static constexpr float kRadToDeg = 57.29577951308232f;
+
+// orient 属性（"auto"/"auto-start-reverse"/数字串，可能带 deg 后缀）→ 固定角度。
+static float ParseOrientAngle(const std::wstring &orient) noexcept {
+  if (orient.empty()) return 0.0f;
+  std::wstring text = orient;
+  if (text.size() > 3 && text.compare(text.size() - 3, 3, L"deg") == 0) {
+    text.resize(text.size() - 3);
+  }
+  try {
+    return std::stof(text);
+  } catch (...) {
+    return 0.0f;
+  }
+}
+
+// 收集一个带 marker 引用元素的几何锚点（端点 + 局部切线角）。引用元素局部坐标系，
+// 绘制时经 accumulatedTransform 映射到根用户坐标。
+// path：把 D2D1 元素上的 d 取回 ID2D1SvgPathData，建几何后按弧长算两端点/切线；
+// line：直接读 x1/y1/x2/y2 属性（D2D1_SVG_LENGTH）。
+static void CollectMarkerRef(
+    SvgView *root,
+    RenderableView *renderable,
+    ID2D1SvgElement &element,
+    D2D1_MATRIX_3X2_F accumulatedTransform) noexcept {
+  auto refs = renderable->GetMarkerRefs();
+  if (refs.empty()) return;
+
+  MarkerRefRecord record;
+  record.refs = refs;
+  record.accumulatedTransform = accumulatedTransform;
+
+  winrt::com_ptr<ID2D1SvgPathData> pathData;
+  if (SUCCEEDED(element.GetAttributeValue(SvgStrings::dAttributeName, pathData.put())) && pathData) {
+    winrt::com_ptr<ID2D1PathGeometry1> geometry;
+    // fillMode 只影响同一点在自交路径上的判定，取 winding 即可（只用来采样端点/切线）。
+    if (SUCCEEDED(pathData->CreatePathGeometry(D2D1_FILL_MODE_WINDING, geometry.put())) && geometry) {
+      float length = 0.0f;
+      if (SUCCEEDED(geometry->ComputeLength(nullptr, &length)) && length > 0.0f) {
+        D2D1_POINT_2F point{}, tangent{};
+        if (SUCCEEDED(geometry->ComputePointAtLength(0.0f, nullptr, &point, &tangent))) {
+          record.startPoint = point;
+          record.startAngle = std::atan2(tangent.y, tangent.x) * kRadToDeg;
+          record.hasStart = true;
+        }
+        if (SUCCEEDED(geometry->ComputePointAtLength(length, nullptr, &point, &tangent))) {
+          record.endPoint = point;
+          record.endAngle = std::atan2(tangent.y, tangent.x) * kRadToDeg;
+          record.hasEnd = true;
+        }
+      }
+    }
+  } else {
+    D2D1_SVG_LENGTH x1{}, y1{}, x2{}, y2{};
+    bool hasLineAttrs = SUCCEEDED(element.GetAttributeValue(SvgStrings::x1AttributeName, &x1)) &&
+        SUCCEEDED(element.GetAttributeValue(SvgStrings::y1AttributeName, &y1)) &&
+        SUCCEEDED(element.GetAttributeValue(SvgStrings::x2AttributeName, &x2)) &&
+        SUCCEEDED(element.GetAttributeValue(SvgStrings::y2AttributeName, &y2));
+    if (hasLineAttrs) {
+      record.startPoint = D2D1::Point2F(x1.value, y1.value);
+      record.endPoint = D2D1::Point2F(x2.value, y2.value);
+      float angle = std::atan2(y2.value - y1.value, x2.value - x1.value) * kRadToDeg;
+      record.startAngle = angle;
+      record.endAngle = angle;
+      record.hasStart = true;
+      record.hasEnd = true;
+    }
+  }
+
+  if (!record.hasStart && !record.hasEnd) return;
+
+  D2D1_SVG_LENGTH strokeWidth{};
+  if (SUCCEEDED(element.GetAttributeValue(SvgStrings::strokeWidthAttributeName, &strokeWidth)) &&
+      strokeWidth.units == D2D1_SVG_LENGTH_UNITS::D2D1_SVG_LENGTH_UNITS_NUMBER) {
+    record.strokeWidth = strokeWidth.value;
+  }
+  root->AddMarkerRef(std::move(record));
+}
+
+// marker 子树 → 独立 D2D1 文档（同主文档的渲染方式；marker 内 text/tspan 不支持，跳过）。
+static void RenderMarkerChildren(
+    const SvgView &root,
+    const winrt::Microsoft::ReactNative::ComponentView &view,
+    ID2D1SvgDocument &document,
+    ID2D1SvgElement &svgElement) noexcept {
+  for (auto const &child : view.Children()) {
+    auto renderable = child.UserData().try_as<RenderableView>();
+    if (renderable && renderable->IsSupported() && !renderable->IsTextElement()) {
+      ID2D1SvgElement &newElement = renderable->Render(root, document, svgElement);
+      RenderMarkerChildren(root, child, document, newElement);
+    }
+  }
+}
+
+// 为 marker 定义构建独立文档：root 尺寸 = marker 视口、viewBox = 定义里的 viewBox
+// （D2D1 的默认 xMidYMid meet 映射与 DrawMarkerRecords 里计算的 V 同源）。
+static winrt::com_ptr<ID2D1SvgDocument> BuildMarkerDocument(
+    SvgView &root,
+    const winrt::com_ptr<ID2D1DeviceContext5> &deviceContext5,
+    const MarkerDef &def,
+    const MarkerDefAttrs &attrs) noexcept {
+  winrt::com_ptr<ID2D1SvgDocument> document;
+  if (FAILED(deviceContext5->CreateSvgDocument(
+          nullptr, D2D1::SizeF(attrs.markerWidth, attrs.markerHeight), document.put()))) {
+    return nullptr;
+  }
+  winrt::com_ptr<ID2D1SvgElement> rootElement;
+  document->GetRoot(rootElement.put());
+  auto setSvgString = [&rootElement](const wchar_t *name, const std::wstring &value) {
+    rootElement->SetAttributeValue(
+        name, D2D1_SVG_ATTRIBUTE_STRING_TYPE::D2D1_SVG_ATTRIBUTE_STRING_TYPE_SVG, value.c_str());
+  };
+  setSvgString(SvgStrings::widthAttributeName, std::to_wstring(attrs.markerWidth));
+  setSvgString(SvgStrings::heightAttributeName, std::to_wstring(attrs.markerHeight));
+  if (attrs.hasViewBox) {
+    setSvgString(
+        SvgStrings::viewBoxAttributeName,
+        std::to_wstring(attrs.vbMinX) + L" " + std::to_wstring(attrs.vbMinY) + L" " +
+            std::to_wstring(attrs.vbWidth) + L" " + std::to_wstring(attrs.vbHeight));
+  }
+  for (auto const &child : def.componentView.Children()) {
+    auto renderable = child.UserData().try_as<RenderableView>();
+    if (renderable && renderable->IsSupported() && !renderable->IsTextElement()) {
+      ID2D1SvgElement &newElement = renderable->Render(root, *document, *rootElement);
+      RenderMarkerChildren(root, child, *document, newElement);
+    }
+  }
+  return document;
+}
+
 void RecurseRenderNode(
     SvgView *root,
     const winrt::Microsoft::ReactNative::ComponentView &view,
@@ -227,6 +374,13 @@ void RecurseRenderNode(
     D2D1_MATRIX_3X2_F accumulatedTransform,
     const TextContext &inheritedTextCtx) noexcept {
   for (auto const &child : view.Children()) {
+    // marker 定义（RNSVGMarker）：D2D1 不渲染 <marker>，只登记定义（props + 子树），
+    // 内容稍后由 DrawMarkerRecords 渲染进独立的 marker 文档并手动放置。
+    if (auto markerView = child.UserData().try_as<IMarkerView>()) {
+      root->AddMarkerDef(markerView, child);
+      continue;
+    }
+
     auto renderable = child.UserData().try_as<RenderableView>();
 
     if (renderable && renderable->IsSupported()) {
@@ -253,6 +407,7 @@ void RecurseRenderNode(
         RecurseRenderNode(root, child, document, svgElement, childTransform, childCtx);
       } else {
         ID2D1SvgElement &newElement = renderable->Render(*root, document, svgElement);
+        CollectMarkerRef(root, renderable.get(), newElement, childTransform);
         RecurseRenderNode(root, child, document, newElement, childTransform, inheritedTextCtx);
       }
     } else {
@@ -364,8 +519,15 @@ void SvgView::Draw(
   }
 
   m_textRecords.clear();
+  m_markerRefs.clear();
+  m_markerDefs.clear();
 
   for (auto const &child : view.Children()) {
+    // marker 定义也可能直接挂在根下（不放进 <defs>）；同 RecurseRenderNode 的拦截。
+    if (auto markerView = child.UserData().try_as<IMarkerView>()) {
+      AddMarkerDef(markerView, child);
+      continue;
+    }
     auto renderable = child.UserData().as<RenderableView>();
     if (renderable->IsSupported()) {
       RecurseRenderNode(this, child, *spSvgDocument, *spRoot, D2D1::Matrix3x2F::Identity(), TextContext{});
@@ -378,6 +540,10 @@ void SvgView::Draw(
   // 信息（含累积 transform + 继承的 font/fill/anchor）收集到 m_textRecords，这里用
   // DWrite 叠加自绘。
   DrawTextRecords(deviceContext, size);
+
+  // D2D1 SVG 不支持 marker，带 marker-start/mid/end 的箭头同样由 RecurseRenderNode
+  // 收集（引用元素锚点 + marker 定义），这里按 SVG marker 语义叠加绘制。
+  DrawMarkerRecords(deviceContext, size);
 }
 
 // viewBox→surface 映射（复现 D2D1 DrawSvgDocument 的 preserveAspectRatio）。
@@ -494,6 +660,97 @@ void SvgView::DrawTextRecords(
     deviceContext->DrawTextLayout(
         D2D1::Point2F(left, top), textLayout.get(), brush.get(),
         D2D1_DRAW_TEXT_OPTIONS_NONE);
+  }
+}
+
+void SvgView::DrawMarkerRecords(
+    const winrt::com_ptr<ID2D1DeviceContext> &deviceContext,
+    winrt::Windows::Foundation::Size size) noexcept {
+  if (m_markerRefs.empty() || m_markerDefs.empty()) return;
+
+  winrt::com_ptr<ID2D1DeviceContext5> deviceContext5;
+  if (FAILED(deviceContext->QueryInterface(IID_PPV_ARGS(deviceContext5.put())))) return;
+
+  float vbScale = 1.0f;
+  auto vbTransform = ComputeViewBoxTransform(size, vbScale);
+
+  // 文档绘制经上下文变换，这里在既有的基础上叠加（既有变换 = surface 偏移等）。
+  D2D1_MATRIX_3X2_F baseTransform;
+  deviceContext->GetTransform(&baseTransform);
+
+  // 同一 marker 的文档一次构建、多实例复用（每次 Draw 生命周期内）。
+  std::unordered_map<std::wstring, winrt::com_ptr<ID2D1SvgDocument>> documentCache;
+
+  for (auto const &record : m_markerRefs) {
+    struct Slot {
+      const std::optional<std::wstring> *id;
+      D2D1_POINT_2F point;
+      float angle;
+      bool has;
+      bool isStart;
+    };
+    Slot slots[2] = {
+        {&record.refs.start, record.startPoint, record.startAngle, record.hasStart, true},
+        {&record.refs.end, record.endPoint, record.endAngle, record.hasEnd, false},
+    };
+    // marker-mid 未实现（d2/mermaid/plantuml/graphviz 的箭头都在两端）。
+
+    for (auto const &slot : slots) {
+      if (!slot.has || !slot.id || !slot.id->has_value()) continue;
+
+      auto defIt = m_markerDefs.find(slot.id->value());
+      if (defIt == m_markerDefs.end()) continue;
+      auto const &def = defIt->second;
+      auto attrs = def.view->Attrs();
+      if (attrs.markerWidth <= 0.0f || attrs.markerHeight <= 0.0f) continue;
+
+      winrt::com_ptr<ID2D1SvgDocument> document;
+      auto cacheIt = documentCache.find(attrs.name);
+      if (cacheIt != documentCache.end()) {
+        document = cacheIt->second;
+      } else {
+        document = BuildMarkerDocument(*this, deviceContext5, def, attrs);
+        documentCache[attrs.name] = document;
+      }
+      if (!document) continue;
+
+      // orient：auto = 沿路径切线方向；auto-start-reverse 在 start 端反向；数字 = 固定角度。
+      float angle;
+      if (attrs.orient == L"auto") {
+        angle = slot.angle;
+      } else if (attrs.orient == L"auto-start-reverse") {
+        angle = slot.isStart ? slot.angle + 180.0f : slot.angle;
+      } else {
+        angle = ParseOrientAngle(attrs.orient);
+      }
+
+      // viewBox → marker 视口映射 V（与 BuildMarkerDocument 里 root 的 viewBox 映射
+      // 同源：默认 xMidYMid meet）。
+      float s = 1.0f, offsetX = 0.0f, offsetY = 0.0f;
+      if (attrs.hasViewBox) {
+        s = std::min(attrs.markerWidth / attrs.vbWidth, attrs.markerHeight / attrs.vbHeight);
+        offsetX = (attrs.markerWidth - attrs.vbWidth * s) / 2.0f;
+        offsetY = (attrs.markerHeight - attrs.vbHeight * s) / 2.0f;
+      }
+      // refX/refY 定义在 viewBox 坐标系，映射到视口坐标系后作为对齐参考点。
+      float refX = attrs.hasViewBox ? (attrs.refX - attrs.vbMinX) * s + offsetX : attrs.refX;
+      float refY = attrs.hasViewBox ? (attrs.refY - attrs.vbMinY) * s + offsetY : attrs.refY;
+
+      float markerScale = attrs.strokeWidthUnits ? record.strokeWidth : 1.0f;
+
+      // 放置矩阵（输入=marker 视口坐标，输出=引用元素局部坐标）。
+      // D2D1 的 A*B 语义是"先 A 后 B"（行向量），按 SVG 语义的顺序合成：
+      // translate(-ref) → scale(markerUnits) → rotate(orient) → translate(端点)。
+      auto placement = D2D1::Matrix3x2F::Translation(-refX, -refY) *
+          D2D1::Matrix3x2F::Scale(markerScale, markerScale) *
+          D2D1::Matrix3x2F::Rotation(angle) *
+          D2D1::Matrix3x2F::Translation(slot.point.x, slot.point.y);
+
+      // marker 文档内部自带 viewBox→视口映射，故上下文变换 = 放置·元素累积变换·根viewBox映射·既有变换。
+      deviceContext->SetTransform(placement * record.accumulatedTransform * vbTransform * baseTransform);
+      deviceContext5->DrawSvgDocument(document.get());
+      deviceContext->SetTransform(baseTransform);
+    }
   }
 }
 

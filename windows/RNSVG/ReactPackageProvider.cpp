@@ -22,6 +22,7 @@
 #include "Fabric/ClipPathView.h"
 #include "Fabric/LinearGradientView.h"
 #include "Fabric/RadialGradientView.h"
+#include "Fabric/MarkerView.h"
 #include "Fabric/UnsupportedSvgView.h"
 #else
 #include "SvgViewManager.h"
@@ -78,7 +79,7 @@ namespace winrt::RNSVG::implementation
     RegisterUnsupportedSvgComponent(L"RNSVGSymbol", fabricPackageBuilder);
     RegisterDefsComponent(fabricPackageBuilder);
     RegisterClipPathComponent(fabricPackageBuilder);
-    RegisterUnsupportedSvgComponent(L"RNSVGMarker", fabricPackageBuilder);
+    RegisterMarkerComponent(fabricPackageBuilder);
     RegisterUnsupportedSvgComponent(L"RNSVGMask", fabricPackageBuilder);
     RegisterLinearGradientComponent(fabricPackageBuilder);
     RegisterRadialGradientComponent(fabricPackageBuilder);
